@@ -202,7 +202,7 @@ static void *trivial_alloc_vdata(const struct scheduler *ops,
     return tvc;
 }
 
-static void trivial_free_data(const struct scheduler * ops, void *priv)
+static void trivial_free_vdata(const struct scheduler * ops, void *priv)
 {
     struct trivial_vcpu *tvc = priv;
 
@@ -250,7 +250,7 @@ const struct scheduler sched_trivial_def =
                 .deinit_pdata   = trivial_deinit_pdata;
 
                 .alloc_vdata = trivial_alloc_vdata,
-                .free_vdata = trivial_free_data,
+                .free_vdata = trivial_free_vdata,
                 /*
                     functions above are all set.
 
