@@ -61,6 +61,16 @@ struct trivial_vcpu {
 struct list_head runq;/*The linked list here maintains a run queue */
 struct vcpu *vcpu;
 };
+
+/*
+*Trivial Domain
+*/
+struct trivial_dom
+{
+    struct list_head tdom_elem;
+    struct domain *dom;
+};
+
 /* 
 *************************************************************************
 Assistance function 
@@ -209,6 +219,52 @@ static void trivial_free_vdata(const struct scheduler * ops, void *priv)
     xfree(tvc);
 }
 
+static void *trivial_alloc_domdata(const struct scheduler *ops, struct domain *d)
+{
+    /*
+        One domain should have only one vcpu for RRP. Where should we specify the link between
+        vcpu and domain? Is the link necessary?
+        This is not given in the definition of trivial_dom for now. Trivial seems to be fine
+        without the link because its schedule is not based on the domain.
+        
+    */
+
+    struct trivial_private *prv = get_trivial_priv(ops);
+    struct trivial_dom *tdom;
+    unsigned long flags;
+
+    tdom = xzalloc(struct trivial_dom);
+    if(tdom == NULL)
+        return ERR_PTR(-ENOMEM);
+
+    tdom->dom = d;
+
+    spin_lock_irqsave(&prv->lock, flags);
+    list_add_tail(&tdom->tdom_elem, &get_trivial_priv(ops)->tdom);
+    spin_unlock_irqrestore(&prv->lock, flags);
+
+    return tdom;
+
+}
+
+static void *trivial_free_domdata(construct scheduler *ops, void *data)
+{
+    struct trivial_dom *tdom = data;
+    struct trivial_private *prv = get_trivial_priv(ops);
+
+    if(tdom)
+    {
+        unsigned long flags;
+
+        spin_lock_irqsave(&prv->lock, flags);
+        list_del_init(&tdom->tdom_elem);
+        spin_unlock_irqrestore(&prv->lock, flags);
+
+        xfree(tdom);
+    }
+}
+
+
 static void insert_trivial_vcpu(const struct scheduler *ops,struct vcpu *v)
 {
     /* BUG(); not touched before the page fault*/
@@ -249,8 +305,10 @@ const struct scheduler sched_trivial_def =
                 .switch_sched   = trivial_switch_sched,
                 .deinit_pdata   = trivial_deinit_pdata;
 
-                .alloc_vdata = trivial_alloc_vdata,
-                .free_vdata = trivial_free_vdata,
+                .alloc_vdata    = trivial_alloc_vdata,
+                .free_vdata     = trivial_free_vdata,
+                .alloc_domdata  = trivial_alloc_domdata,
+                .free_domdata   = trivial_free_domdata,
                 /*
                     functions above are all set.
 
