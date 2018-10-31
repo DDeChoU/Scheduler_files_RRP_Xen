@@ -35,6 +35,9 @@ struct trivial_private
 {
     spinlock_t lock;        /* scheduler lock; nests inside cpupool_lock */
     struct list_head ndom;  /* Domains of this scheduler */
+    struct list_head runq;
+    spinlock_t runq_lock;
+    struct list_head *now;
     /*
         Compared to sched_null, we do not maintain a waitq for vcpu and do not maintain a cpus_free.
     
@@ -57,9 +60,10 @@ struct trivial_pcpu
 /*
  *Trivial VCPU
  */
-struct trivial_vcpu {
-struct list_head runq;/*The linked list here maintains a run queue */
-struct vcpu *vcpu;
+struct trivial_vcpu 
+{
+    struct list_head runq_elem;/*The linked list here maintains a run queue */
+    struct vcpu *vcpu;
 };
 
 /*
@@ -81,18 +85,25 @@ static inline struct trivial_private* get_trivial_priv(const struct scheduler *o
     return ops->sched_data;
 }
 
-static inline void insert_runq(struct trivial_vcpu *tvc)
+static inline struct trivial_vcpu *get_trivial_vcpu(const struct vcpu *v)
 {
-    /* null is using the cpu to link back to the sched_vcpu, we can follow the credit style, 
-    but it seems we need to pick a cpu before we insert anyway. use list_add_tail to insert */
+    return v->sched_priv;
 }
 
-static void init_pdata(struct trivial_private* prv, unsigned int cpu )
+
+static inline void init_pdata(struct trivial_private* prv, unsigned int cpu )
 {
     /* Mark the PCPU as free, initialize the pcpu as no vcpu associated  */
     cpumask_set_cpu(cpu, &prv->cpus_free);
     per_cpu(npc, cpu).vcpu = NULL;
 }
+
+
+/*takes in the head of the linked list and return the end of the linked list. If the list is empty, return NULL.
+ *Since it is a circular linked list, just return the previous of the head.
+*/
+
+
 
 
 /* 
@@ -111,10 +122,11 @@ static int trivial_init(struct scheduler* ops)
         return -ENOMEN;
 
     spin_lock_init(&prv->lock);
+    spin_lock_init(&prv->runq_lock);
     INIT_LIST_HEAD(&prv->ndom);
-
+    INIT_LIST_HEAD(&prv->runq);
     ops->sched_data = prv;
-
+    now = &prv->runq;
     return 0;
 }
 
@@ -204,8 +216,8 @@ static void *trivial_alloc_vdata(const struct scheduler *ops,
     tvc = xzalloc(struct trivial_vcpu);
     if (tvc == NULL)
             return NULL;
-    INIT_LIST_HEAD(tvc->runq);
-    tvc->runq = v;
+    INIT_LIST_HEAD(&tvc->runq_elem);
+    tvc->vcpu = v;
 
     SCHED_STAT_CRANK(vcpu_alloc);
 
@@ -240,7 +252,7 @@ static void *trivial_alloc_domdata(const struct scheduler *ops, struct domain *d
     tdom->dom = d;
 
     spin_lock_irqsave(&prv->lock, flags);
-    list_add_tail(&tdom->tdom_elem, &get_trivial_priv(ops)->tdom);
+    list_add_tail(&tdom->tdom_elem, &get_trivial_priv(ops)->ndom);
     spin_unlock_irqrestore(&prv->lock, flags);
 
     return tdom;
@@ -265,32 +277,62 @@ static void *trivial_free_domdata(construct scheduler *ops, void *data)
 }
 
 
-static void insert_trivial_vcpu(const struct scheduler *ops,struct vcpu *v)
+static void trivial_insert_vcpu(const struct scheduler *ops,struct vcpu *v)
 {
     /* BUG(); not touched before the page fault*/
     /*
-        1. do cpu_pick() : choose a cpu that the vcpu will be working on. Use lock when picking.
-        2. Add the vcpu into the runq, use lock as well.
-    
+         Add the vcpu into the runq, use lock as well.
+         Should we lock or not?
     */
 
-    if(vcpu_list_head==NULL)
-    {
-        vcpu_list_head=v;
-        vcpu_list_tail=v;
-    }
-    else {
-        vcpu_list_tail->sched_priv = vcpu_list_tail;
-        vcpu_list_tail =v;
-    }
-    v->sched_priv=NULL;
+    trivial_private *prv = get_trivial_priv(ops);
+    spin_lock(&prv->runq_lock);
+    list_add_tail(&v->runq_elem, &prv->runq);
+    spin_unlock(&prv->runq_lock);
        /* return 0;*/
     /* BUG();  not reached, page fault occurs before this. */
 }
 
+static void trivial_remove_vcpu(struct trivial_private *prv, struct vcpu *v)
+{
+    unsigned int cpu = v->processor;
+    struct trivial_vcpu *tvc = get_trivial_vcpu(v);
+    ASSERT(list_empty(&tvc->runq_elem));
+    vcpu_deassign(prv, v, cpu);
+    list_del_init(tvc->runq_elem);
+    spin_lock(&prv->runq_lock);
+    SCHED_STAT_CRANK(vcpu_remove);
+}
 
+static struct task_slice trivial_schedule(const struct scheduler *ops,
+                                          s_time_t now,
+                                          bool_t tasklet_work_scheduled)
+{
+    struct task_slice ret;
+    struct list_head* pos;
+    struct trivial_private *pri = get_trivial_priv(ops); 
+    struct trivial_vcpu *tvc = NULL;
+    ret.time = MILLISECS(10);
 
-/* make an interface (definition structure)*/
+    list_for_each(pos, pri->now)
+    {
+        if(pos == &pri->runq)
+            continue;
+        tvc = list_entry(pos, struct trivial_vcpu, runq_elem);
+        if(vcpu_runnable(tvc))
+        {
+            ret.task = tvc;
+        }
+    }
+    /*
+        ret.task = ((struct vcpu*)per_cpu(schedule_data)).idle
+    */
+    return ret;
+    /*
+    * How to increment queue here????
+    */
+
+}
 
 const struct scheduler sched_trivial_def =
         {
@@ -313,8 +355,8 @@ const struct scheduler sched_trivial_def =
                     functions above are all set.
 
                 */
-                .insert_vcpu = insert_trivial_vcpu,
-                .remove_vcpu = trivial_destroy_vcpu,
+                .insert_vcpu = trivial_insert_vcpu,
+                .remove_vcpu = trivial_remove_vcpu,
                 .do_schedule = trivial_sched,
 
       };
