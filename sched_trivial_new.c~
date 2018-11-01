@@ -317,7 +317,7 @@ static struct task_slice trivial_schedule(const struct scheduler *ops,
     struct trivial_private *pri = get_trivial_priv(ops); 
     struct trivial_vcpu *tvc = NULL;
     ret.time = MILLISECS(10);
-    BUG();
+
     list_for_each(pos, pri->now)
     {
         if(pos == &pri->runq)

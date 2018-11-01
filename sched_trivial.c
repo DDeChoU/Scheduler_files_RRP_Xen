@@ -37,7 +37,7 @@ struct trivial_private
     struct list_head ndom;  /* Domains of this scheduler */
     struct list_head runq;
     spinlock_t runq_lock;
-    struct list_head *now;
+    struct list_head *list_now;
     /*
         Compared to sched_null, we do not maintain a waitq for vcpu and do not maintain a cpus_free.
     
@@ -127,7 +127,8 @@ static int trivial_init(struct scheduler* ops)
     INIT_LIST_HEAD(&prv->ndom);
     INIT_LIST_HEAD(&prv->runq);
     ops->sched_data = prv;
-    prv->now = &prv->runq;
+    prv->list_now = &prv->runq;
+    printk(KERN_ERR "INITIALIZATION");
     return 0;
 }
 
@@ -156,6 +157,8 @@ static void trivial_init_pdata(const struct scheduler *ops, void *pdata, int cpu
 
 
 */
+
+    printk(KERN_ERR "INIT_PData");
     init_pdata(prv, cpu);
 }
 
@@ -196,6 +199,7 @@ static void trivial_switch_sched(struct scheduler *new_ops, unsigned int cpu,
     smp_mb();
     sd->schedule_lock = &sd->_lock;
 
+    printk(KERN_ERR "SWITCH_SCHED");
 }
 
 static void trivial_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
@@ -222,6 +226,7 @@ static void *trivial_alloc_vdata(const struct scheduler *ops,
 
     SCHED_STAT_CRANK(vcpu_alloc);
 
+    printk(KERN_ERR "ALLOC_VDATA");
     return tvc;
 }
 
@@ -317,8 +322,9 @@ static struct task_slice trivial_schedule(const struct scheduler *ops,
     struct trivial_private *pri = get_trivial_priv(ops); 
     struct trivial_vcpu *tvc = NULL;
     ret.time = MILLISECS(10);
-    BUG();
-    list_for_each(pos, pri->now)
+    /*BUG();*/    
+
+    list_for_each(pos, pri->list_now)
     {
         if(pos == &pri->runq)
             continue;
@@ -326,8 +332,11 @@ static struct task_slice trivial_schedule(const struct scheduler *ops,
         if(vcpu_runnable(tvc->vcpu))
         {
             ret.task = tvc;
+	    pri->list_now = &tvc->runq_elem;
+	    break;
         }
     }
+    /*BUG();*/ 
     /*
         ret.task = ((struct vcpu*)per_cpu(schedule_data)).idle
     */
