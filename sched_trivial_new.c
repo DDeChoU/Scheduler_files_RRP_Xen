@@ -55,7 +55,7 @@ struct trivial_pcpu
 {
     struct list_head waitq_elem;
     struct vcpu *vcpu;
-}
+};
 
 /*
  *Trivial VCPU
@@ -93,9 +93,10 @@ static inline struct trivial_vcpu *get_trivial_vcpu(const struct vcpu *v)
 
 static inline void init_pdata(struct trivial_private* prv, unsigned int cpu )
 {
-    /* Mark the PCPU as free, initialize the pcpu as no vcpu associated  */
+    /* Mark the PCPU as free, initialize the pcpu as no vcpu associated 
     cpumask_set_cpu(cpu, &prv->cpus_free);
     per_cpu(npc, cpu).vcpu = NULL;
+    */
 }
 
 
@@ -119,14 +120,14 @@ static int trivial_init(struct scheduler* ops)
 
     prv = xzalloc(struct trivial_private);
     if(prv == NULL)
-        return -ENOMEN;
+        return -ENOMEM;
 
     spin_lock_init(&prv->lock);
     spin_lock_init(&prv->runq_lock);
     INIT_LIST_HEAD(&prv->ndom);
     INIT_LIST_HEAD(&prv->runq);
     ops->sched_data = prv;
-    now = &prv->runq;
+    prv->now = &prv->runq;
     return 0;
 }
 
@@ -199,12 +200,12 @@ static void trivial_switch_sched(struct scheduler *new_ops, unsigned int cpu,
 
 static void trivial_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
 {
-    struct trivial_private *prv = get_trivial_priv(ops);
+   /* struct trivial_private *prv = get_trivial_priv(ops);
 
     ASSERT(!pcpu);
 
-    cpumask_clear_cpu(cpu, &prv->cpus_free);
-    per_cpu(npc, cpu).vcpu = NULL;
+   cpumask_clear_cpu(cpu, &prv->cpus_free);
+    per_cpu(npc, cpu).vcpu = NULL;*/
 }
 
 
@@ -259,7 +260,7 @@ static void *trivial_alloc_domdata(const struct scheduler *ops, struct domain *d
 
 }
 
-static void *trivial_free_domdata(construct scheduler *ops, void *data)
+static void *trivial_free_domdata(struct scheduler *ops, void *data)
 {
     struct trivial_dom *tdom = data;
     struct trivial_private *prv = get_trivial_priv(ops);
@@ -285,9 +286,10 @@ static void trivial_insert_vcpu(const struct scheduler *ops,struct vcpu *v)
          Should we lock or not?
     */
 
-    trivial_private *prv = get_trivial_priv(ops);
+    struct trivial_private *prv = get_trivial_priv(ops);
+    struct trivial_vcpu *tvc = get_trivial_vcpu(v);
     spin_lock(&prv->runq_lock);
-    list_add_tail(&v->runq_elem, &prv->runq);
+    list_add_tail(&tvc->runq_elem, &prv->runq);
     spin_unlock(&prv->runq_lock);
        /* return 0;*/
     /* BUG();  not reached, page fault occurs before this. */
@@ -298,8 +300,10 @@ static void trivial_remove_vcpu(struct trivial_private *prv, struct vcpu *v)
     unsigned int cpu = v->processor;
     struct trivial_vcpu *tvc = get_trivial_vcpu(v);
     ASSERT(list_empty(&tvc->runq_elem));
-    vcpu_deassign(prv, v, cpu);
-    list_del_init(tvc->runq_elem);
+    /*vcpu_deassign(prv, v, cpu);
+     * Should implement vcpu_deassign here to get the vcpu out of the pcpu.	
+    */
+    list_del_init(&tvc->runq_elem);
     spin_lock(&prv->runq_lock);
     SCHED_STAT_CRANK(vcpu_remove);
 }
@@ -319,7 +323,7 @@ static struct task_slice trivial_schedule(const struct scheduler *ops,
         if(pos == &pri->runq)
             continue;
         tvc = list_entry(pos, struct trivial_vcpu, runq_elem);
-        if(vcpu_runnable(tvc))
+        if(vcpu_runnable(tvc->vcpu))
         {
             ret.task = tvc;
         }
@@ -343,21 +347,18 @@ const struct scheduler sched_trivial_def =
 
                 .init           = trivial_init,
                 .deinit         = trivial_deinit,
-                .init_pdata     = trivial_init_pdata;
+                .init_pdata     = trivial_init_pdata,
                 .switch_sched   = trivial_switch_sched,
-                .deinit_pdata   = trivial_deinit_pdata;
+                .deinit_pdata   = trivial_deinit_pdata,
 
                 .alloc_vdata    = trivial_alloc_vdata,
                 .free_vdata     = trivial_free_vdata,
                 .alloc_domdata  = trivial_alloc_domdata,
                 .free_domdata   = trivial_free_domdata,
-                /*
-                    functions above are all set.
-
-                */
-                .insert_vcpu = trivial_insert_vcpu,
+                
+		.insert_vcpu = trivial_insert_vcpu,
                 .remove_vcpu = trivial_remove_vcpu,
-                .do_schedule = trivial_sched,
+                .do_schedule = trivial_schedule,
 
       };
 REGISTER_SCHEDULER(sched_trivial_def);
