@@ -35,9 +35,9 @@ struct trivial_private
 {
     spinlock_t lock;        /* scheduler lock; nests inside cpupool_lock */
     struct list_head ndom;  /* Domains of this scheduler */
-    struct list_head runq;
+
     spinlock_t runq_lock;
-    struct list_head *list_now;
+
     /*
         Compared to sched_null, we do not maintain a waitq for vcpu and do not maintain a cpus_free.
     
@@ -53,10 +53,11 @@ struct trivial_private
 
 struct trivial_pcpu
 {
-    struct list_head waitq_elem;
-    struct vcpu *vcpu;
-};
 
+    struct list_head runq;
+    struct list_head *list_now;
+};
+DEFINE_PER_CPU(struct trivial_pcpu, TPC);
 /*
  *Trivial VCPU
  */
@@ -90,13 +91,22 @@ static inline struct trivial_vcpu *get_trivial_vcpu(const struct vcpu *v)
     return v->sched_priv;
 }
 
+static inline struct trivial_pcpu *get_trivial_pcpu(const unsigned int cpu)
+{
+    return (struct trivial_pcpu *)per_cpu(schedule_data, cpu).sched_priv;
+}
 
-static inline void init_pdata(struct trivial_private* prv, unsigned int cpu )
+static inline void init_pdata(struct trivial_private* prv, struct trivial_pcpu *tpc unsigned int cpu )
 {
     /* Mark the PCPU as free, initialize the pcpu as no vcpu associated 
     cpumask_set_cpu(cpu, &prv->cpus_free);
-    per_cpu(npc, cpu).vcpu = NULL;
+    per_cpu(tpc, cpu).vcpu = NULL;
+    
+    nr_runnable is given in the csched_pcpu, may not need it without migration considered. 
+    One option to fix the bug if the pick_cpu cannot find a valid pcpu.
     */
+    cpumask_set_cpu(cpu, &prv->cpus_free);
+    per_cpu(TPC, cpu).vcpu = NULL;
 }
 
 
@@ -125,9 +135,7 @@ static int trivial_init(struct scheduler* ops)
     spin_lock_init(&prv->lock);
     spin_lock_init(&prv->runq_lock);
     INIT_LIST_HEAD(&prv->ndom);
-    INIT_LIST_HEAD(&prv->runq);
     ops->sched_data = prv;
-    prv->list_now = &prv->runq;
     printk(KERN_ERR "INITIALIZATION");
     return 0;
 }
@@ -145,6 +153,11 @@ static void trivial_init_pdata(const struct scheduler *ops, void *pdata, int cpu
 {
     struct trivial_private *prv = get_trivial_priv(ops);
     struct schedule_data * sd = &per_cpu(schedule_data, cpu);
+    unsigned long flags;
+
+    spin_lock_irqsave(&prv->lock, flags);
+    init_pdata(prv, pdata, cpu);
+    spin_unlock_irqrestore(&prv->lock, flags);
 /*
     Omit the assert below for the time being.
     ASSERT(!pdata);
@@ -159,7 +172,6 @@ static void trivial_init_pdata(const struct scheduler *ops, void *pdata, int cpu
 */
 
     printk(KERN_ERR "INIT_PData");
-    init_pdata(prv, cpu);
 }
 
 
@@ -204,12 +216,12 @@ static void trivial_switch_sched(struct scheduler *new_ops, unsigned int cpu,
 
 static void trivial_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
 {
-   /* struct trivial_private *prv = get_trivial_priv(ops);
+   struct trivial_private *prv = get_trivial_priv(ops);
 
-    ASSERT(!pcpu);
+   ASSERT(!pcpu);
 
    cpumask_clear_cpu(cpu, &prv->cpus_free);
-    per_cpu(npc, cpu).vcpu = NULL;*/
+   per_cpu(TPC, cpu).vcpu = NULL;
 }
 
 
@@ -293,9 +305,67 @@ static void trivial_insert_vcpu(const struct scheduler *ops,struct vcpu *v)
 
     struct trivial_private *prv = get_trivial_priv(ops);
     struct trivial_vcpu *tvc = get_trivial_vcpu(v);
+    unsigned int cpu;
+    spinlock_t *lock;
+
+    lock = vcpu_schedule_lock_irq(v);
+retry:
+    cpu = v->processor = trivial_cpu_pick(ops, v);
+    spin_unlock(lock);
+    lock = vcpu_schedule_lock(v);
+   cpumask_and(cpumask_scratch_cpu(cpu), v->cpu_hard_affinity,
+                cpupool_domain_cpumask(v->domain));
+
+    /* If the pCPU is free, we assign v to it */
+    if ( likely(per_cpu(TPC, cpu).vcpu == NULL) )
+    {
+        /*
+         * Insert is followed by vcpu_wake(), so there's no need to poke
+         * the pcpu with the SCHEDULE_SOFTIRQ, as wake will do that.
+         */
+        vcpu_assign(prv, v, cpu);
+    }
+    else if ( cpumask_intersects(&prv->cpus_free, cpumask_scratch_cpu(cpu)) )
+    {
+        /*
+         * If the pCPU is not free (e.g., because we raced with another
+         * insert or a migrate), but there are other free pCPUs, we can
+         * try to pick again.
+         */
+         goto retry;
+    }
+    else
+    {
+        /*
+         * If the pCPU is not free, and there aren't any (valid) others,
+         * we have no alternatives than to go into the waitqueue. These are codes in null_scheduler
+        spin_lock(&prv->waitq_lock);
+        list_add_tail(&nvc->waitq_elem, &prv->waitq);
+        dprintk(XENLOG_G_WARNING, "WARNING: %pv not assigned to any CPU!\n", v);
+        spin_unlock(&prv->waitq_lock);
+         */
+        BUG();
+    }
+
+    /* put the vcpu into the linked list of each pcpu, do this after implementing the initialization */
+
+
+    spin_unlock_irq(lock);
+    struct trivial_pcpu *tpc = get_trivial_pcpu(cpu);
+
+    spin_lock(&prv->runq_lock);
+    list_add_tail(&tvc->runq_elem, &tpc->runq);
+
+    spin_unlock(&prv->runq_lock);
+
+
+
+    SCHED_STAT_CRANK(vcpu_insert); 
+    /* should be using the runq head
     spin_lock(&prv->runq_lock);
     list_add_tail(&tvc->runq_elem, &prv->runq);
     spin_unlock(&prv->runq_lock);
+    */
        /* return 0;*/
     /* BUG();  not reached, page fault occurs before this. */
 }
@@ -313,6 +383,81 @@ static void trivial_remove_vcpu(struct trivial_private *prv, struct vcpu *v)
     SCHED_STAT_CRANK(vcpu_remove);
 }
 
+/* 
+* Try to find a valid pcpu for the vcpu. It is OK even all CPUs are busy.
+*/
+static int trivial_cpu_pick(const struct scheduler *ops, struct vcpu *v)
+{
+    struct trivial_private *prv = get_trivial_priv(ops);
+    unsigned int bs;
+    unsigned int cpu = v->processor, new_cpu;
+    cpumask_t *cpus = cpupool_domain_cpumask(v->domain);
+
+    ASSERT(spin_is_locked(per_cpu(schedule_data, cpu).schedule_lock));
+
+    for_each_affinity_balance_step( bs )
+    {
+        if ( bs == BALANCE_SOFT_AFFINITY && !has_soft_affinity(v) )
+            continue;
+
+        affinity_balance_cpumask(v, bs, cpumask_scratch_cpu(cpu));
+        cpumask_and(cpumask_scratch_cpu(cpu), cpumask_scratch_cpu(cpu), cpus);
+
+        /*
+         * If our processor is free, or we are assigned to it, and it is also
+         * still valid and part of our affinity, just go for it.
+         * (Note that we may call vcpu_check_affinity(), but we deliberately
+         * don't, so we get to keep in the scratch cpumask what we have just
+         * put in it.)
+         */
+        if ( likely((per_cpu(TPC, cpu).vcpu == NULL || per_cpu(TPC, cpu).vcpu == v)
+                    && cpumask_test_cpu(cpu, cpumask_scratch_cpu(cpu))) )
+        {
+            new_cpu = cpu;
+            goto out;
+        }
+
+        /* If not, just go for a free pCPU, within our affinity, if any */
+        cpumask_and(cpumask_scratch_cpu(cpu), cpumask_scratch_cpu(cpu),
+                    &prv->cpus_free);
+        new_cpu = cpumask_first(cpumask_scratch_cpu(cpu));
+
+        if ( likely(new_cpu != nr_cpu_ids) )
+            goto out;
+    }
+
+    /*
+     * If we didn't find any free pCPU, just pick any valid pcpu, even if
+     * it has another vCPU assigned. This will happen during shutdown and
+     * suspend/resume, but it may also happen during "normal operation", if
+     * all the pCPUs are busy.
+     *
+     * In fact, there must always be something sane in v->processor, or
+     * vcpu_schedule_lock() and friends won't work. This is not a problem,
+     * as we will actually assign the vCPU to the pCPU we return from here,
+     * only if the pCPU is free.
+     */
+    cpumask_and(cpumask_scratch_cpu(cpu), cpus, v->cpu_hard_affinity);
+    new_cpu = cpumask_any(cpumask_scratch_cpu(cpu));
+
+ out:
+    if ( unlikely(tb_init_done) )
+    {
+        struct {
+            uint16_t vcpu, dom;
+            uint32_t new_cpu;
+        } d;
+        d.dom = v->domain->domain_id;
+        d.vcpu = v->vcpu_id;
+        d.new_cpu = new_cpu;
+        __trace_var(TRC_SNULL_PICKED_CPU, 1, sizeof(d), &d);
+    }
+
+    return new_cpu;
+}
+
+
+
 static struct task_slice trivial_schedule(const struct scheduler *ops,
                                           s_time_t now,
                                           bool_t tasklet_work_scheduled)
@@ -324,28 +469,48 @@ static struct task_slice trivial_schedule(const struct scheduler *ops,
     ret.time = MILLISECS(10);
     /*BUG();*/    
 
-    list_for_each(pos, pri->list_now)
+    /*Choose the corresponding vcpu from the corresponding cpu, use smp_processor_id()*/
+    const int cpu = smp_processor_id();
+    struct trivial_pcpu *tpc = get_trivial_pcpu(cpu);
+    list_for_each(pos, tpc->list_now)
     {
-        if(pos == &pri->runq)
+        if(pos == &tpc->runq)
+        {
             continue;
+        }
         tvc = list_entry(pos, struct trivial_vcpu, runq_elem);
         if(vcpu_runnable(tvc->vcpu))
         {
-            ret.task = tvc;
-	    pri->list_now = &tvc->runq_elem;
-	    break;
+            ret.task = tvc->vcpu;
+            tpc->list_now = &tvc->runq_elem;
+            break;
         }
     }
-    /*BUG();*/ 
-    /*
-        ret.task = ((struct vcpu*)per_cpu(schedule_data)).idle
-    */
+
+
     return ret;
     /*
-    * How to increment queue here????
+    * how to deal with the case where no vcpu is selected? The way the book gave is not applicable any more.
     */
 
 }
+
+static void * trivial_alloc_pdata(const struct scheduler *ops, int cpu)
+{
+    struct trivial_pcpu *tpc;
+    tpc = xzalloc(struct trivial_pcpu);
+    INIT_LIST_HEAD(tpc->runq);
+    list_now = &tpc->runq;
+
+    return tpc;
+}
+
+static void trivial_free_pdata(const struct scheduler *ops, void *pcpu, int cpu)
+{
+    struct trivial_private *prv = get_trivial_priv(ops);
+    xfree(pcpu);
+}
+
 
 const struct scheduler sched_trivial_def =
         {
@@ -364,8 +529,12 @@ const struct scheduler sched_trivial_def =
                 .free_vdata     = trivial_free_vdata,
                 .alloc_domdata  = trivial_alloc_domdata,
                 .free_domdata   = trivial_free_domdata,
+
+                .alloc_pdata    = trivial_alloc_pdata,
+                .free_pdata     = trivial_free_pdata,
+                .pick_cpu       = trivial_cpu_pick,
                 
-		.insert_vcpu = trivial_insert_vcpu,
+                .insert_vcpu = trivial_insert_vcpu,
                 .remove_vcpu = trivial_remove_vcpu,
                 .do_schedule = trivial_schedule,
 
