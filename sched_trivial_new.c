@@ -25,8 +25,13 @@
 
 /* macros that simplifies the connection */
 #define TRIVIAL_VCPU(_vcpu)   ((struct trivial_vcpu *)(_vcpu)->sched_priv)
-
-/*Maintaining a RUN_Q for VPCUs in the VCPU*/
+/*Tracing events.*/
+#define TRC_TRIVIAL_PICKED_CPU    TRC_SCHED_CLASS_EVT(TRIVIAL, 1)
+#define TRC_TRIVIAL_VCPU_ASSIGN   TRC_SCHED_CLASS_EVT(TRIVIAL, 2)
+#define TRC_TRIVIAL_VCPU_DEASSIGN TRC_SCHED_CLASS_EVT(TRIVIAL, 3)
+#define TRC_TRIVIAL_MIGRATE       TRC_SCHED_CLASS_EVT(TRIVIAL, 4)
+#define TRC_TRIVIAL_SCHEDULE      TRC_SCHED_CLASS_EVT(TRIVIAL, 5)
+#define TRC_TRIVIAL_TASKLET       TRC_SCHED_CLASS_EVT(TRIVIAL, 6)
 
 /*
 *System-wide private data for algorithm trivial
@@ -134,7 +139,7 @@ static void vcpu_assign(struct trivial_private *prv, struct trivial_vcpu *tvc, u
         d.dom = v->domain->domain_id;
         d.vcpu = v->vcpu_id;
         d.cpu = cpu;
-        __trace_var(TRC_SNULL_VCPU_ASSIGN, 1, sizeof(d), &d);
+        __trace_var(TRC_TRIVIAL_VCPU_ASSIGN, 1, sizeof(d), &d);
     }
 }
 
@@ -156,7 +161,7 @@ static void vcpu_deassign(struct trivial_private *prv, struct vcpu *v,
         d.dom = v->domain->domain_id;
         d.vcpu = v->vcpu_id;
         d.cpu = cpu;
-        __trace_var(TRC_SNULL_VCPU_DEASSIGN, 1, sizeof(d), &d);
+        __trace_var(TRC_TRIVIAL_VCPU_DEASSIGN, 1, sizeof(d), &d);
     }
 }
 
@@ -248,7 +253,7 @@ static void trivial_switch_sched(struct scheduler *new_ops, unsigned int cpu,
      */
     ASSERT(!local_irq_is_enabled());
 
-    init_pdata(prv, cpu);
+    init_pdata(prv, pdata, cpu);
 
     per_cpu(scheduler, cpu) = new_ops;
     per_cpu(schedule_data, cpu).sched_priv = pdata;
@@ -345,49 +350,7 @@ static void *trivial_free_domdata(struct scheduler *ops, void *data)
 }
 
 
-static void trivial_insert_vcpu(const struct scheduler *ops,struct vcpu *v)
-{
-    /* BUG(); not touched before the page fault*/
-    /*
-         Add the vcpu into the runq, use lock as well.
-         Should we lock or not?
-    */
 
-    struct trivial_private *prv = get_trivial_priv(ops);
-    struct trivial_vcpu *tvc = get_trivial_vcpu(v);
-    unsigned int cpu;
-    spinlock_t *lock;
-
-    lock = vcpu_schedule_lock_irq(v);
-retry:
-    cpu = v->processor = trivial_cpu_pick(ops, v);
-    spin_unlock(lock);
-    lock = vcpu_schedule_lock(v);
-   cpumask_and(cpumask_scratch_cpu(cpu), v->cpu_hard_affinity,
-                cpupool_domain_cpumask(v->domain));
-
-
-    vcpu_assign(prv, tvc, cpu);
-
-
-    /* put the vcpu into the linked list of each pcpu, do this after implementing the initialization,
-       assign the vcpu whether the cpu is idle or not. */
-
-
-    spin_unlock_irq(lock);
-
-
-
-
-    SCHED_STAT_CRANK(vcpu_insert); 
-    /* should be using the runq head
-    spin_lock(&prv->runq_lock);
-    list_add_tail(&tvc->runq_elem, &prv->runq);
-    spin_unlock(&prv->runq_lock);
-    */
-       /* return 0;*/
-    /* BUG();  not reached, page fault occurs before this. */
-}
 
 static void trivial_remove_vcpu(struct trivial_private *prv, struct vcpu *v)
 {
@@ -468,12 +431,56 @@ static int trivial_cpu_pick(const struct scheduler *ops, struct vcpu *v)
         d.dom = v->domain->domain_id;
         d.vcpu = v->vcpu_id;
         d.new_cpu = new_cpu;
-        __trace_var(TRC_SNULL_PICKED_CPU, 1, sizeof(d), &d);
+        __trace_var(TRC_TRIVIAL_PICKED_CPU, 1, sizeof(d), &d);
     }
 
     return new_cpu;
 }
 
+
+static void trivial_insert_vcpu(const struct scheduler *ops,struct vcpu *v)
+{
+    /* BUG(); not touched before the page fault*/
+    /*
+         Add the vcpu into the runq, use lock as well.
+         Should we lock or not?
+    */
+
+    struct trivial_private *prv = get_trivial_priv(ops);
+    struct trivial_vcpu *tvc = get_trivial_vcpu(v);
+    unsigned int cpu;
+    spinlock_t *lock;
+
+    lock = vcpu_schedule_lock_irq(v);
+retry:
+    cpu = v->processor = trivial_cpu_pick(ops, v);
+    spin_unlock(lock);
+    lock = vcpu_schedule_lock(v);
+   cpumask_and(cpumask_scratch_cpu(cpu), v->cpu_hard_affinity,
+                cpupool_domain_cpumask(v->domain));
+
+
+    vcpu_assign(prv, tvc, cpu);
+
+
+    /* put the vcpu into the linked list of each pcpu, do this after implementing the initialization,
+       assign the vcpu whether the cpu is idle or not. */
+
+
+    spin_unlock_irq(lock);
+
+
+
+
+    SCHED_STAT_CRANK(vcpu_insert); 
+    /* should be using the runq head
+    spin_lock(&prv->runq_lock);
+    list_add_tail(&tvc->runq_elem, &prv->runq);
+    spin_unlock(&prv->runq_lock);
+    */
+       /* return 0;*/
+    /* BUG();  not reached, page fault occurs before this. */
+}
 
 
 static struct task_slice trivial_schedule(const struct scheduler *ops,
@@ -518,7 +525,7 @@ static void * trivial_alloc_pdata(const struct scheduler *ops, int cpu)
     struct trivial_pcpu *tpc;
     tpc = xzalloc(struct trivial_pcpu);
     INIT_LIST_HEAD(&tpc->runq);
-    list_now = &tpc->runq;
+    tpc->list_now = &tpc->runq;
 
     return tpc;
 }
@@ -539,7 +546,7 @@ static void trivial_vcpu_wake(const struct scheduler *ops, struct vcpu *v)
         return;
     }
 
-    if ( unlikely(!list_empty(&null_vcpu(v)->waitq_elem)) )
+    if ( unlikely(!list_empty(&get_trivial_vcpu(v)->runq_elem)) )
     {
         /* Not exactly "on runq", but close enough for reusing the counter */
         SCHED_STAT_CRANK(vcpu_wake_onrunq);
@@ -570,7 +577,7 @@ const struct scheduler sched_trivial_def =
         {
                 .name           = "Trivial Round Robin Scheduler",
                 .opt_name       = "trivial",
-                .sched_id       = XEN_SCHEDULER_CREDIT,
+                .sched_id       = XEN_SCHEDULER_CREDIT2,
                 .sched_data     = NULL,
 
                 .init           = trivial_init,
