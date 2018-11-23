@@ -134,6 +134,54 @@ struct list_head timeslices;
 struct AAF_dom *doms;
 };
 
+/**************************************** Assistance Functions *******************************************/
+void swap(int * a, int * b)
+{
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+/*Adjust each element to a reasonable place in the maximum heap*/
+void down_adjust(int arr[], int i, int n)
+{
+    int son = i*2+1, parent = i;
+    while(son<n)
+    {
+        if(son+1<n && arr[son+1] > arr[son])
+            son ++;
+        if(arr[parent] > arr[son])
+            return;
+        swap(&arr[parent], &arr[son]);
+        parent = son;
+        son = parent * 2 + 1;
+    }
+}
+
+/*Heap sort main */
+void heap_sort_insert(int arr[], int n)
+{
+    int counter = 0;
+    /*initialize the heap*/
+    for(counter = n/2 -1; counter >= 0; counter --)
+    {
+        down_adjust(arr, counter, n);
+    }
+    for(counter = n-1; counter>0; counter--)
+    {
+        /*arr[0] is now the largest time slice, insert it from the back
+         * Utilize functions list_last_entry and list_prev_entry to accomplish the insertion.
+         * Mind that the index of the time slice needs to be mentioned in struct timeslice.
+        */
+        swap(&arr[0], &arr[counter]);
+        down_adjust(arr, 0, counter - 1);
+    }
+}
+
+/*********************************************************************************************************/
+
+
+
 /* alloc_pdata */
 /* allocate before initialize */
 /* for initializing the data structures inside a pcpu */
