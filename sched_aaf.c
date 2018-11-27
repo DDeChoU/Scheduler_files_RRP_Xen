@@ -50,6 +50,7 @@ printk("Checking of '%s' failed at line %d of file %s\n", \
 #define AAF_SLEEP (MILLISECS(20))
 #define PERIOD_MIN (MICROSECS(10))
 #define PERIOD_MAX (MILLISECS(10000))
+#define TIMESLICERRAYSIZE (65536)
 #define AAF_COMP_MIN (MICROSECS(5))
 #define CALCULATE_W(level) \
 			(1.0/POWER(2,level))
@@ -57,8 +58,9 @@ printk("Checking of '%s' failed at line %d of file %s\n", \
 			(struct AAF_dom *)(_dom)->sched_priv)
 #define APPROX_VAL(val) (floor(val))
 /* can freely access the global data pointer coming from struct scheduler */
-#define AAF_PRIV_INFO(_domain) (\
-				(struct AAF_private_info *)(_domain)->sched_data)
+/* Hence typecasting it to type struct AAF_private_info */
+#define AAF_PRIV_INFO(_d) (\
+				(struct AAF_private_info *)(_d)->sched_data)
 #define AAF_PCPU(_pc) \
 		((struct aaf_pcpu *)per_cpu(schedule_data,_pc).sched_priv)
 
@@ -75,7 +77,7 @@ struct AAF_pcpu
 {
 struct timeslice *t_slices;
 /* for future use, in case */
-struct list_head lists;
+struct list_head lists; /* For vcpus */
     s_time_t hp;
 };
 /* The AAF's VCPU structure */
@@ -123,6 +125,7 @@ struct AAF_private_info
 spinlock_t lock;
 int vcpu_count;
 cpumask_t cpus; /* cpumask_t for all available physical CPUs */
+struct list_head ndom; /* Domains in the system */
 };
 
 /* the time slice of the system */
@@ -259,6 +262,69 @@ ASSERT(!cpumask_empty(&cpus) && cpumask_test_cpu(cpu_no,&cpus));
 return cpu_no;
 }
 
+           
+/* AAF_init() an initializer function of AAF scheduler */
+static int AAF_init(struct scheduler *ops)
+{
+   /* Allocation of AAF-private_info */
+    struct AAF_private_info *prv;
+    prv = xzalloc(struct AAF_private_info);
+    /* Error Check */
+    if(prv == NULL)
+        return -ENOMEM;
+    /* If the cpumask_var is not set, deallocate it */
+    if(!zalloc_cpumask_var(&prv->cpus)
+       {
+       free_cpumask_var(prv->cpus);
+        xfree(prv);
+           return -ENOMEM;
+       }
+       /* storing the AAF scheduler private info to main scheduler's struct */
+       ops->sched_data = prv;
+       /* List Initialization of domains */
+       INIT_LIST_HEAD(&prv->ndom);
+       /* Initialize the spinlock for the scheduler */
+       spin_lock_init(&prv->lock);
+       return 0;
+}
+
+/* AAF_deinit() a Deinitializer to free allocated memory in struct
+* AAF_private_info */
+static void AAF_deinit(struct scheduler *ops)
+{
+    struct AAF_private_info *prv;
+    /* docking local private info of scheduler to global scheduler struct */
+    prv = AAF_PRIV_INFO(ops);
+    if(prv!=NULL)
+    {
+        ops->schedule_data = NULL;
+        free_cpumask_var(prv->cpus);
+        xfree(prv);
+    }
+}  
+
+
+/* Domain Allocation */
+static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
+{
+    struct AAF_dom *adom;
+    adom = xzalloc(struct AAF_dom);
+    /* Error Check */
+    if(adom == NULL)
+        return ERR_PTR(-ENOMEM);
+    /* List Initializations */
+    INIT_LIST_HEAD(&adom->element);
+    INIT_LIST_HEAD(&adom->vcpu);
+    /* Linking the AAF scheduler's domain to the struct dom */
+    adom->dom = dom;
+    return adom;
+}
+
+/* Dealloc Domain Data */
+static void AAF_free_domdata(const struct scheduler *ops,void *data)
+{
+    xfree(data);
+}         
 /********************* APPROXIMATION FUNCTION *******/
 static double approx_val(double val)
 {
@@ -395,6 +461,15 @@ list_head *iteration;
 }
 return result;
 }
+/* Function to find First Available Time slice */
+int findFirstAvailableTimeSlice()
+{
+	int sched[TIMESLICERRAYSIZE];
+	for(int i=0;i< TIMESLICERRAYSIZE;i++)
+		if(sched[i]==-1)
+			return(i);
+	return -1;
+}
 
 #ifndef __AAF_SINGLE__
 static inline void aaf_single(struct AAF_dom *domains)
@@ -446,7 +521,7 @@ struct list_head *iterator;
         int w = 1/PWR_TWO(level);
         int tsize = w * Hyperperiod(doms,pcpus);
         /* iterate through the list of domains to collect aaf's */
-        for(int i=0;i<NUMBER_OF_DOMAINS;i++)
+        for(int i=0;i<number_of_domains ;i++)
         {
             if(domains[i].aaf_calc(domains[i].alpha,domains[i].k)>w || domains[i].aaf_calc(domains[i].alpha,domains[i].k)==w)
             {
@@ -467,15 +542,16 @@ struct list_head *iterator;
     }
     /* sorting */
     /* content inside t_p[][] is transferred to time slice linked list, sort the slices and then insert in an increasing order */
-    for(int i=0;i<NUMBER_OF_DOMAINS;i++)
+    for(int i=0;i<number_of_domains ;i++)
     {
         /* perform a merge sort on the content inside t_p[][] */
+        heap_sort_insert[t_p[i+(t_p_counter[i]++)],(number_of_domains*level*(domains[i].distance))];
     }
 #endif
  
 /* Gets the Count of elements inside the Linked List */
 /* can be optimized by adding it in the sched_Priv for aaf_dom_priv */
-static int getCount(struct list_head *head)
+int getCount(struct list_head *head)
 {
     int count =0;
     struct list_head *current = head;
@@ -487,3 +563,27 @@ static int getCount(struct list_head *head)
     return count;
 }
 
+/* This struct is the congregation of all the scheduler functions */
+ const struct scheduler sched_aaf =
+{
+        .name = "AAF Scheduler",
+        .opt_name = "aaf",
+        .sched_id = XEN_SCHEDULER_AAF, /* sched_id of AAF has to be registered later on */
+        
+        /* Scheduler Init Functions */
+        .init = AAF_init,
+        .deinit = AAF_deinit,
+
+        /* PCPU Functions */
+        .alloc_pdata = AAF_alloc_pdata,
+        .init_pdata = AAF_init_pdata,
+        .deinit_pdata = AAF_deinit_pdata,
+        .free_pdata = AAF_free_pdata,
+
+        /* Domain Allocation and Freeing */
+        .alloc_domdata = AAF_alloc_domdata,
+        .free_domdata = AAF_free_domdata,
+        
+        
+};
+REGISTER_SCHEDULER(sched_aaf);
