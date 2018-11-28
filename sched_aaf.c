@@ -75,43 +75,43 @@ return ;
 /* The AAF's PCPU structure */
 struct AAF_pcpu
 {
-struct timeslice *t_slices;
-/* for future use, in case */
-struct list_head lists; /* For vcpus */
+    struct list_head time_list;/* need initialization, linked list for time slices.*/
+    /* for future use, in case */
+    struct list_head vcpu_list; /* For vcpus */
     s_time_t hp;
 };
 /* The AAF's VCPU structure */
 /* s_time_t in microsecond measurement */
 struct AAF_vcpu
 {
-struct vcpu *vcpu;
-struct AAF_dom *dom;
-struct list_head element; /* vcpu, an element on the linked list. */
+    struct vcpu *vcpu;
+    struct AAF_dom *dom;
+    struct list_head element; /* vcpu, an element on the linked list. */
 
-s_time_t comp_time_slice; /*computational time slice */
-s_time_t deadline_abs;   /*absolute deadline */
-s_time_t deadline_rel;   /*relative deadline */
-unsigned flags; /* for future use */ 
+    s_time_t comp_time_slice; /*computational time slice */
+    s_time_t deadline_abs;   /*absolute deadline */
+    s_time_t deadline_rel;   /*relative deadline */
+    unsigned flags; /* for future use */ 
 
 };
 
 /* The AAF's domain structure */
 struct AAF_dom
 {
-/* AAF params */
-unsigned int k;
-double alpha;
-struct list_head vcpu; /*link all the vcpu's inside this domain */
-struct list_head element; /* linked list on aaf_private */
-struct domain *dom; /* pointer to the superset domain */
-/* each domain has a specific aaf value */
-/* Hence, passing a FNCPTR of aaf_calc() to this struct */
-double (*aaf_calc)(double alpha,int k);
-/* level0, level 1,level 2...have some time slices in them,
-* hence a 2d array */
-int **level;
-/* calculates the distance between time slices within */
-int distance;
+    /* AAF params */
+    unsigned int k;
+    double alpha;
+    struct list_head vcpu; /*link all the vcpu's inside this domain */
+    struct list_head element; /* linked list on aaf_private */
+    struct domain *dom; /* pointer to the superset domain */
+    /* each domain has a specific aaf value */
+    /* Hence, passing a FNCPTR of aaf_calc() to this struct */
+    double (*aaf_calc)(double alpha,int k);
+    /* level0, level 1,level 2...have some time slices in them,
+    * hence a 2d array */
+    int **level;
+    /* calculates the distance between time slices within */
+    int distance;
     s_time_t period;
     int distindex;
 };
@@ -121,24 +121,31 @@ int distance;
 
 struct AAF_private_info
 {
-/* global lock for the scheduler */
-spinlock_t lock;
-int vcpu_count;
-cpumask_t cpus; /* cpumask_t for all available physical CPUs */
-struct list_head ndom; /* Domains in the system */
+    /* global lock for the scheduler */
+    spinlock_t lock;
+    int vcpu_count;
+    cpumask_t cpus; /* cpumask_t for all available physical CPUs */
+    struct list_head ndom; /* Domains in the system */
 };
 
 /* the time slice of the system */
 struct timeslice 
 {
-/* list_head for  iterating thru the list of timeslices */
-struct list_head timeslices;
-/* AAF_vcpus to get the sequence of time slices */
-struct AAF_dom *doms;
+    /* list_head for  iterating thru the list of timeslices */
+    struct list_head time_list;
+    /* AAF_vcpus to get the sequence of time slices */
+    struct AAF_dom *dom_ptr;
+    /*The index of the time slice */
+    int index;
 };
 
 /**************************************** Assistance Functions *******************************************/
-void swap(int * a, int * b)
+static inline struct AAF_pcpu* get_AAF_pcpu(const unsigned int cpu)
+{
+    return (struct AAF_pcpu *)per_cpu(schedule_data, cpu).sched_priv;
+}
+
+static inline void swap(int * a, int * b)
 {
     int temp = *a;
     *a = *b;
@@ -146,7 +153,7 @@ void swap(int * a, int * b)
 }
 
 /*Adjust each element to a reasonable place in the maximum heap*/
-void down_adjust(int arr[], int i, int n)
+static inline void down_adjust(int arr[], int i, int n)
 {
     int son = i*2+1, parent = i;
     while(son<n)
@@ -161,10 +168,12 @@ void down_adjust(int arr[], int i, int n)
     }
 }
 
-/*Heap sort main */
-void heap_sort_insert(int arr[], int n)
+/*Heap sort and insert elements into the corresponding pcpu */
+static inline void heap_sort_insert(int arr[], int n, int pcpu, struct AAF_dom *dom_ptr)
 {
     int counter = 0;
+    struct AAF_pcpu* apcpu = get_AAF_pcpu(cpu);
+    struct list_head *head = &apcpu->time_list, *end = (head)->prev, *temp = end;
     /*initialize the heap*/
     for(counter = n/2 -1; counter >= 0; counter --)
     {
@@ -176,6 +185,18 @@ void heap_sort_insert(int arr[], int n)
          * Utilize functions list_last_entry and list_prev_entry to accomplish the insertion.
          * Mind that the index of the time slice needs to be mentioned in struct timeslice.
         */
+
+        while(temp!=head && list_entry(temp, struct timeslice, time_list)->index > arr[counter])
+        {
+            temp = temp->prev;
+        }
+        /*Find the correct place to insert and then initialize the timeslice and insert it into the linked list*/
+        timeslice* t = xzalloc(timeslice);
+        t->dom_ptr = dom_ptr;
+        INIT_LIST_HEAD(t->time_list);
+        t->index = arr[counter];
+        list_add(t->time_list, temp);
+        
         swap(&arr[0], &arr[counter]);
         down_adjust(arr, 0, counter - 1);
     }
@@ -208,7 +229,7 @@ static void * AAF_alloc_pdata(const struct scheduler *ops, int cpu)
 {
     struct AAF_pcpu *pcpus;
     pcpus = xzalloc(struct AAF_pcpu);
-    INIT_LIST_HEAD(&pcpus->lists);
+    INIT_LIST_HEAD(&pcpus->vcpu_list);
     return pcpus;
 }
 
@@ -376,9 +397,9 @@ static inline s_time_t Hyperperiod(struct AAF_dom *domains, struct AAF_pcpu *pcp
     struct list_head iterator;
     /* Each domain has a period */
     pcpus->hp =domains->period;
-    list_for_each(iterator,&pcpus->lists)
+    list_for_each(iterator,&pcpus->vcpu_list)
     {
-        pcpu_list=list_entry(iterator,struct AAF_pcpu,lists);
+        pcpu_list=list_entry(iterator,struct AAF_pcpu,vcpu_list);
         pcpu_list->hp = (((domains->period)*(pcpus->hp))/(GCD(domains->period),pcpus->hp));
     }
     return pcpu_list->hp;
@@ -407,22 +428,22 @@ else
 /* math.h log10 */
 static double ln(double x)
 {
-double old_sum=0.0;
-double number1 = (x-1)/(x+1);
-double number_2 = number1*number1;
-double denom = 1.0;
-double frac = number1;
-double term = frac;
-double sum = term;
+    double old_sum=0.0;
+    double number1 = (x-1)/(x+1);
+    double number_2 = number1*number1;
+    double denom = 1.0;
+    double frac = number1;
+    double term = frac;
+    double sum = term;
 
-while(sum!= old_sum)
-{
-old_sum=sum;
-denom+=2.0;
-frac*=number_2;
-sum+= frac/denom;
-}
-return 2.0*sum;
+    while(sum!= old_sum)
+    {
+    old_sum=sum;
+    denom+=2.0;
+    frac*=number_2;
+    sum+= frac/denom;
+    }
+    return 2.0*sum;
 }
 
 /* AAF calculation Function */
