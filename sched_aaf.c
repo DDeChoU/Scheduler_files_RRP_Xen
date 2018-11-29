@@ -629,14 +629,14 @@ static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *
 static void AAF_insert_vcpu(const struct scheduler *ops, struct vcpu *v)
 {
     struct AAF_vcpu *avc = get_AAF_vcpu(v);
-    struct AAF_pcpu *apc = avc->dom;
+    struct AAF_dom *adom = avc->dom;
     /*Add the vcpu into the linked list of the domain*/
-    spin_lock(&apc->lock_dom);
-    list_add_tail(&avc->vcpu_list, &apc->vcpu_list);
-    spin_unlock(&apc->lock_dom);
+    spin_lock(&adom->lock_dom);
+    list_add_tail(&avc->vcpu_list, &adom->vcpu_list);
+    spin_unlock(&adom->lock_dom);
 
     /*Allocate the vcpu to the domain's pcpu*/
-    
+
 
 }
 
