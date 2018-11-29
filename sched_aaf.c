@@ -611,6 +611,7 @@ int getCount(struct list_head *head)
 
 
 
+
 static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *dd)
 {
     struct AAF_vcpu *avc;
@@ -618,6 +619,7 @@ static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *
     if(avc == NULL)
         return NULL;
     INIT_LIST_HEAD(avc->vcpu_list);
+    avc->dom = dd;
     /* 
      * To be initialized:
      * AAF_dom *dom;
@@ -639,6 +641,13 @@ static void AAF_insert_vcpu(const struct scheduler *ops, struct vcpu *v)
     spin_unlock(&adom->lock_dom);
 
     /*Allocate the vcpu to the domain's pcpu*/
+    spinlock_t *lock;
+
+    lock = vcpu_schedule_lock_irq(v);
+    /*
+     * v->processor = (PUT THE cpu number of the processor where the domain lies on here);
+    */
+    spin_unlock(lock);
 
 
 }
