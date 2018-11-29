@@ -76,8 +76,6 @@ return ;
 struct AAF_pcpu
 {
     struct list_head time_list;/* need initialization, linked list for time slices.*/
-    /* for future use, in case */
-    struct list_head vcpu_list; /* For vcpus */
     s_time_t hp;
 };
 /* The AAF's VCPU structure */
@@ -86,9 +84,8 @@ struct AAF_vcpu
 {
     struct vcpu *vcpu;
     struct AAF_dom *dom;
-    struct list_head element; /* vcpu, an element on the linked list. */
+    struct list_head vcpu_list; /* vcpu, an element on the linked list. */
 
-    s_time_t comp_time_slice; /*computational time slice */
     s_time_t deadline_abs;   /*absolute deadline */
     s_time_t deadline_rel;   /*relative deadline */
     unsigned flags; /* for future use */ 
@@ -101,7 +98,7 @@ struct AAF_dom
     /* AAF params */
     unsigned int k;
     double alpha;
-    struct list_head vcpu; /*link all the vcpu's inside this domain */
+    struct list_head vcpu_list; /*link all the vcpu's inside this domain */
     struct list_head element; /* linked list on aaf_private */
     struct domain *dom; /* pointer to the superset domain */
     /* each domain has a specific aaf value */
@@ -114,6 +111,7 @@ struct AAF_dom
     int distance;
     s_time_t period;
     int distindex;
+    spinlock_t lock_dom;
 };
 
 /* Scheduler Private data */
@@ -217,6 +215,101 @@ static inline s_time_t Hyperperiod(struct AAF_dom *domain, struct AAF_pcpu *pcpu
 	}
     return (pcpu->hp);
 }
+
+
+/********************* APPROXIMATION FUNCTION *******/
+static double approx_val(double val)
+{
+    if(val - APPROX_VAL(val)>0.99999)
+        return(APPROX_VAL(val)+1);
+    if(val - APPROX_VAL(val)>0.49999 && val - APPROX_VAL(val)< 0.5)
+        return (APPROX_VAL(val)+0.5);
+    if(val - APPROX_VAL(val)> 0 && val - APPROX_VAL(val)<0.00001)
+        return APPROX_VAL(val);
+    return(val);
+}
+
+/*** HELPER FUNCTIONS ***/
+/* GCD and LCM are for calculating Hyperperiod of the tasks */
+static inline s_time_t GCD(s_time_t a, s_time_t b)
+{
+    if(b==0)
+        return a;
+    return GCD(b,a%b);
+}
+
+
+/* this includes the LCM of all the periods of the VCPUs
+* within a given domain */
+#ifndef __AAF_HP__
+static inline s_time_t hyperperiod(struct AAF_vcpu *vcpus)
+{
+s_time_t hp = vcpus->period; /* to get initial instance first */
+struct list_head *iterator;
+struct AAF_vcpu *vcpus1;
+/*list_for_each() is taking in position and head as arguments 
+* to iterate through the list*/
+/* list_entry is initializing the list that then enables us
+* to use the elements of the struct that contains this list */
+    list_for_each(iterator,&vcpus->element)/* iterates thru the list */
+    {
+           vcpus1=list_entry(iterator,struct AAF_vcpu,element);
+        hp=((vcpus1->period)*hp)/(GCD(vcpus1->period),hp);
+    }
+return hp;
+}
+#else
+/* Takes a carrier ie: domain with a period
+ * puts it to a destination PCPU and then re-
+ * calculates Hyperperiod of that PCPU */
+
+#endif
+/* math.h floor */
+static int floor(double val)
+{
+int result = (int)val;
+if(result>val && result<0)
+    return (result-1);
+else
+    return result;
+}
+
+/* math.h ceil */
+static int ceil(double val)
+{
+int result =(int)val;
+if(result>val && result<0)
+    return (result);
+else
+    return (result+1);
+}
+
+/* math.h log10 */
+static double ln(double x)
+{
+    double old_sum=0.0;
+    double number1 = (x-1)/(x+1);
+    double number_2 = number1*number1;
+    double denom = 1.0;
+    double frac = number1;
+    double term = frac;
+    double sum = term;
+
+    while(sum!= old_sum)
+    {
+    old_sum=sum;
+    denom+=2.0;
+    frac*=number_2;
+    sum+= frac/denom;
+    }
+    return 2.0*sum;
+}
+
+static inline struct AAF_vcpu *get_AAF_vcpu(const struct vcpu *v)
+{
+    return v->sched_priv;
+}
+
 /*********************************************************************************************************/
 
 
@@ -244,7 +337,7 @@ static void * AAF_alloc_pdata(const struct scheduler *ops, int cpu)
 {
     struct AAF_pcpu *pcpus;
     pcpus = xzalloc(struct AAF_pcpu);
-    INIT_LIST_HEAD(&pcpus->vcpu_list);
+    INIT_LIST_HEAD(&pcpus->time_list);
     return pcpus;
 }
 
@@ -275,6 +368,9 @@ static void AAF_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
 * and the available CPUs on the system */
 /* Returns the PCPU number that is to be assigned */
 
+/*this function needs to be modified because vcpu is now transparent to the pcpu,
+ *Simply check whether the domain of this vcpu is connected to a pcpu.
+*/
 static int aaf_cpu_pick(const struct scheduler *ops, struct vcpu *v)
 {
 cpumask_t cpus;
@@ -354,11 +450,12 @@ static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
     if(adom == NULL)
         return ERR_PTR(-ENOMEM);
     /* List Initializations */
-    INIT_LIST_HEAD(&adom->element);
-    INIT_LIST_HEAD(&adom->vcpu);
+    INIT_LIST_HEAD(&adom->vcpu_list);
+    INIT_LIST_HEAD(&adom->vcpu_list);
     /* Linking the AAF scheduler's domain to the struct dom */
     adom->dom = dom;
     maxtsize = Hyperperiod(adom,get_AAF_pcpu(cpu_no));
+    spin_lock_init(&adom->lock_dom);
     /* AAF_single() can be called here */
     /* The pcpu's linked list has to be wiped out */
     aaf_single(adom, maxtsize);
@@ -371,94 +468,6 @@ static void AAF_free_domdata(const struct scheduler *ops,void *data)
 {
     xfree(data);
 }         
-/********************* APPROXIMATION FUNCTION *******/
-static double approx_val(double val)
-{
-    if(val - APPROX_VAL(val)>0.99999)
-        return(APPROX_VAL(val)+1);
-    if(val - APPROX_VAL(val)>0.49999 && val - APPROX_VAL(val)< 0.5)
-        return (APPROX_VAL(val)+0.5);
-    if(val - APPROX_VAL(val)> 0 && val - APPROX_VAL(val)<0.00001)
-        return APPROX_VAL(val);
-    return(val);
-}
-
-/*** HELPER FUNCTIONS ***/
-/* GCD and LCM are for calculating Hyperperiod of the tasks */
-static inline s_time_t GCD(s_time_t a, s_time_t b)
-{
-    if(b==0)
-        return a;
-    return GCD(b,a%b);
-}
-
-
-/* this includes the LCM of all the periods of the VCPUs
-* within a given domain */
-#ifndef __AAF_HP__
-static inline s_time_t hyperperiod(struct AAF_vcpu *vcpus)
-{
-s_time_t hp = vcpus->period; /* to get initial instance first */
-struct list_head *iterator;
-struct AAF_vcpu *vcpus1;
-/*list_for_each() is taking in position and head as arguments 
-* to iterate through the list*/
-/* list_entry is initializing the list that then enables us
-* to use the elements of the struct that contains this list */
-	list_for_each(iterator,&vcpus->element)/* iterates thru the list */
-	{
-	       vcpus1=list_entry(iterator,struct AAF_vcpu,element);
-		hp=((vcpus1->period)*hp)/(GCD(vcpus1->period),hp);
-	}
-return hp;
-}
-#else
-/* Takes a carrier ie: domain with a period
- * puts it to a destination PCPU and then re-
- * calculates Hyperperiod of that PCPU */
-
-#endif
-/* math.h floor */
-static int floor(double val)
-{
-int result = (int)val;
-if(result>val && result<0)
-	return (result-1);
-else
-	return result;
-}
-
-/* math.h ceil */
-static int ceil(double val)
-{
-int result =(int)val;
-if(result>val && result<0)
-	return (result);
-else
-	return (result+1);
-}
-
-/* math.h log10 */
-static double ln(double x)
-{
-    double old_sum=0.0;
-    double number1 = (x-1)/(x+1);
-    double number_2 = number1*number1;
-    double denom = 1.0;
-    double frac = number1;
-    double term = frac;
-    double sum = term;
-
-    while(sum!= old_sum)
-    {
-    old_sum=sum;
-    denom+=2.0;
-    frac*=number_2;
-    sum+= frac/denom;
-    }
-    return 2.0*sum;
-}
-
 /* AAF calculation Function */
 /* ****** Mem Alloc NOT DONE YET ******/
 /* Assuming struct aaf_dom *doms is already 
@@ -599,6 +608,42 @@ int getCount(struct list_head *head)
     return count;
 }
 
+
+
+
+static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *dd)
+{
+    struct AAF_vcpu *avc;
+    avc = xzalloc(struct AAF_vcpu);
+    if(avc == NULL)
+        return NULL;
+    INIT_LIST_HEAD(avc->vcpu_list);
+    /* 
+     * To be initialized:
+     * AAF_dom *dom;
+     * s_time_t deadline_abs, deadline_rel;
+    */
+    SCHED_STAT_CRANK(vcpu_alloc);
+
+    return avc;
+}
+
+
+static void AAF_insert_vcpu(const struct scheduler *ops, struct vcpu *v)
+{
+    struct AAF_vcpu *avc = get_AAF_vcpu(v);
+    struct AAF_dom *adom = avc->dom;
+    /*Add the vcpu into the linked list of the domain*/
+    spin_lock(&adom->lock_dom);
+    list_add_tail(&avc->vcpu_list, &adom->vcpu_list);
+    spin_unlock(&adom->lock_dom);
+
+    /*Allocate the vcpu to the domain's pcpu*/
+
+
+}
+
+
 /* This struct is the congregation of all the scheduler functions */
  const struct scheduler sched_aaf =
 {
@@ -620,6 +665,12 @@ int getCount(struct list_head *head)
         .alloc_domdata = AAF_alloc_domdata,
         .free_domdata = AAF_free_domdata,
         
-        
+        /* VCPU Allocation */
+        .alloc_vdata = AAF_alloc_vdata,
+        .free_vdata  = AAF_free_vdata,
+        .insert_vcpu = AAF_insert_vcpu,
+        .remove_vcpu = AAF_remove_vcpu,
+
+
 };
 REGISTER_SCHEDULER(sched_aaf);
