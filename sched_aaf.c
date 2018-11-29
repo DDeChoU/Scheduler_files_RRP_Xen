@@ -84,9 +84,8 @@ struct AAF_vcpu
 {
     struct vcpu *vcpu;
     struct AAF_dom *dom;
-    struct list_head element; /* vcpu, an element on the linked list. */
+    struct list_head vcpu_list; /* vcpu, an element on the linked list. */
 
-    s_time_t comp_time_slice; /*computational time slice */
     s_time_t deadline_abs;   /*absolute deadline */
     s_time_t deadline_rel;   /*relative deadline */
     unsigned flags; /* for future use */ 
@@ -112,6 +111,7 @@ struct AAF_dom
     int distance;
     s_time_t period;
     int distindex;
+    spinlock_t lock_dom;
 };
 
 /* Scheduler Private data */
@@ -305,6 +305,10 @@ static double ln(double x)
     return 2.0*sum;
 }
 
+static inline struct AAF_vcpu *get_AAF_vcpu(const struct vcpu *v)
+{
+    return v->sched_priv;
+}
 
 /*********************************************************************************************************/
 
@@ -364,6 +368,9 @@ static void AAF_deinit_pdata(const struct scheduler *ops, void *pcpu, int cpu)
 * and the available CPUs on the system */
 /* Returns the PCPU number that is to be assigned */
 
+/*this function needs to be modified because vcpu is now transparent to the pcpu,
+ *Simply check whether the domain of this vcpu is connected to a pcpu.
+*/
 static int aaf_cpu_pick(const struct scheduler *ops, struct vcpu *v)
 {
 cpumask_t cpus;
@@ -443,11 +450,12 @@ static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
     if(adom == NULL)
         return ERR_PTR(-ENOMEM);
     /* List Initializations */
-    INIT_LIST_HEAD(&adom->element);
+    INIT_LIST_HEAD(&adom->vcpu_list);
     INIT_LIST_HEAD(&adom->vcpu_list);
     /* Linking the AAF scheduler's domain to the struct dom */
     adom->dom = dom;
     maxtsize = Hyperperiod(adom,get_AAF_pcpu(cpu_no));
+    spin_lock_init(&adom->lock_dom);
     /* AAF_single() can be called here */
     /* The pcpu's linked list has to be wiped out */
 
@@ -597,6 +605,42 @@ int getCount(struct list_head *head)
     return count;
 }
 
+
+
+
+static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *dd)
+{
+    struct AAF_vcpu *avc;
+    avc = xzalloc(struct AAF_vcpu);
+    if(avc == NULL)
+        return NULL;
+    INIT_LIST_HEAD(avc->vcpu_list);
+    /* 
+     * To be initialized:
+     * AAF_dom *dom;
+     * s_time_t deadline_abs, deadline_rel;
+    */
+    SCHED_STAT_CRANK(vcpu_alloc);
+
+    return avc;
+}
+
+
+static void AAF_insert_vcpu(const struct scheduler *ops, struct vcpu *v)
+{
+    struct AAF_vcpu *avc = get_AAF_vcpu(v);
+    struct AAF_pcpu *apc = avc->dom;
+    /*Add the vcpu into the linked list of the domain*/
+    spin_lock(&apc->lock_dom);
+    list_add_tail(&avc->vcpu_list, &apc->vcpu_list);
+    spin_unlock(&apc->lock_dom);
+
+    /*Allocate the vcpu to the domain's pcpu*/
+    
+
+}
+
+
 /* This struct is the congregation of all the scheduler functions */
  const struct scheduler sched_aaf =
 {
@@ -618,6 +662,12 @@ int getCount(struct list_head *head)
         .alloc_domdata = AAF_alloc_domdata,
         .free_domdata = AAF_free_domdata,
         
-        
+        /* VCPU Allocation */
+        .alloc_vdata = AAF_alloc_vdata,
+        .free_vdata  = AAF_free_vdata,
+        .insert_vcpu = AAF_insert_vcpu,
+        .remove_vcpu = AAF_remove_vcpu,
+
+
 };
 REGISTER_SCHEDULER(sched_aaf);
