@@ -169,10 +169,12 @@ static inline void down_adjust(int arr[], int i, int n)
 }
 
 /*Heap sort and insert elements into the corresponding pcpu */
+/* Returning sorted timeslices */
 static inline void heap_sort_insert(int arr[], int n, int pcpu, struct AAF_dom *dom_ptr)
 {
     int counter = 0;
-    struct AAF_pcpu* apcpu = get_AAF_pcpu(cpu);
+    struct AAF_pcpu* apcpu = get_AAF_pcpu(cpu); // where is cpu coming from
+
     struct list_head *head = &apcpu->time_list, *end = (head)->prev, *temp = end;
     /*initialize the heap*/
     for(counter = n/2 -1; counter >= 0; counter --)
@@ -191,17 +193,30 @@ static inline void heap_sort_insert(int arr[], int n, int pcpu, struct AAF_dom *
             temp = temp->prev;
         }
         /*Find the correct place to insert and then initialize the timeslice and insert it into the linked list*/
-        timeslice* t = xzalloc(timeslice);
+        t = xzalloc(timeslice);
         t->dom_ptr = dom_ptr;
-        INIT_LIST_HEAD(t->time_list);
+        INIT_LIST_HEAD(&t->time_list);
         t->index = arr[counter];
-        list_add(t->time_list, temp);
+        list_add(&t->time_list, temp);
         
         swap(&arr[0], &arr[counter]);
         down_adjust(arr, 0, counter - 1);
+
+
     }
 }
 
+/* hyperperiod calculation */
+static inline s_time_t Hyperperiod(struct AAF_dom *domain, struct AAF_pcpu *pcpu)
+{
+	if(pcpu->hp ==0)
+		pcpu->hp = domain->period;
+	else
+	{
+		pcpu->hp = ((domain->period)*(pcpu->hp))/GCD((domain->period),pcpu->hp);
+	}
+    return (pcpu->hp);
+}
 /*********************************************************************************************************/
 
 
@@ -328,7 +343,12 @@ static void AAF_deinit(struct scheduler *ops)
 /* Domain Allocation */
 static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
 {
+	/* gets current cpu number */
+	/* this shall then help us in obtaining the current pcpu struct with
+	 * get_AAF_pcpu(cpu_number) */
+	int cpu_no = smp_processor_id();
     struct AAF_dom *adom;
+    s_time_t maxtsize;
     adom = xzalloc(struct AAF_dom);
     /* Error Check */
     if(adom == NULL)
@@ -338,6 +358,10 @@ static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
     INIT_LIST_HEAD(&adom->vcpu);
     /* Linking the AAF scheduler's domain to the struct dom */
     adom->dom = dom;
+    maxtsize = Hyperperiod(adom,get_AAF_pcpu(cpu_no));
+    /* AAF_single() can be called here */
+    /* The pcpu's linked list has to be wiped out */
+
     return adom;
 }
 
@@ -391,19 +415,7 @@ return hp;
 /* Takes a carrier ie: domain with a period
  * puts it to a destination PCPU and then re-
  * calculates Hyperperiod of that PCPU */
-static inline s_time_t Hyperperiod(struct AAF_dom *domains, struct AAF_pcpu *pcpus)
-{
-    struct AAF_pcpu *pcpu_list;
-    struct list_head iterator;
-    /* Each domain has a period */
-    pcpus->hp =domains->period;
-    list_for_each(iterator,&pcpus->vcpu_list)
-    {
-        pcpu_list=list_entry(iterator,struct AAF_pcpu,vcpu_list);
-        pcpu_list->hp = (((domains->period)*(pcpus->hp))/(GCD(domains->period),pcpus->hp));
-    }
-    return pcpu_list->hp;
-}
+
 #endif
 /* math.h floor */
 static int floor(double val)
