@@ -361,7 +361,8 @@ static void * AAF_alloc_domdata(const struct scheduler *ops, struct domain *dom)
     maxtsize = Hyperperiod(adom,get_AAF_pcpu(cpu_no));
     /* AAF_single() can be called here */
     /* The pcpu's linked list has to be wiped out */
-
+    aaf_single(adom, maxtsize);
+    
     return adom;
 }
 
@@ -534,10 +535,12 @@ list_for_each(iterator,&domains->element)
 }
 }
 #else
-static inline void aaf_single(struct AAF_dom *doms)
+static inline void aaf_single(struct AAF_dom *doms, s_time_t hp)
 {
-    /* maxtsize is the index of a time slice */
-int level=0,firstlevel, maxtsize;
+    /* hp we obtain is of type s_time_t, however we need to have 
+     * an int to  get the maxtsize that determines the max  size of partitions */
+	int maxtsize = int (hp);
+int level=0,firstlevel;
 double w=1,maxaaf;
 maxaaf=findmaxaaf(doms);
 struct list_head *iterator;
