@@ -88,6 +88,7 @@ struct AAF_vcpu
 
     s_time_t deadline_abs;   /*absolute deadline */
     s_time_t deadline_rel;   /*relative deadline */
+    s_time_t period;
     unsigned flags; /* for future use */ 
 
 };
@@ -101,6 +102,7 @@ struct AAF_dom
     struct list_head vcpu_list; /*link all the vcpu's inside this domain */
     struct list_head element; /* linked list on aaf_private */
     struct domain *dom; /* pointer to the superset domain */
+    struct AAF_vcpu *vcpu;
     /* each domain has a specific aaf value */
     /* Hence, passing a FNCPTR of aaf_calc() to this struct */
     double (*aaf_calc)(double alpha,int k);
@@ -109,7 +111,7 @@ struct AAF_dom
     int **level;
     /* calculates the distance between time slices within */
     int distance;
-    s_time_t period;
+    
     int distindex;
     spinlock_t lock_dom;
 };
@@ -208,10 +210,10 @@ static inline void heap_sort_insert(int arr[], int n, int pcpu, struct AAF_dom *
 static inline s_time_t Hyperperiod(struct AAF_dom *domain, struct AAF_pcpu *pcpu)
 {
 	if(pcpu->hp ==0)
-		pcpu->hp = domain->period;
+		pcpu->hp = domain->vcpu->period;
 	else
 	{
-		pcpu->hp = ((domain->period)*(pcpu->hp))/GCD((domain->period),pcpu->hp);
+		pcpu->hp = ((domain->vcpu->period)*(pcpu->hp))/GCD((domain->vcpu->period),pcpu->hp);
 	}
     return (pcpu->hp);
 }
@@ -619,7 +621,10 @@ static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *v, void *
     if(avc == NULL)
         return NULL;
     INIT_LIST_HEAD(avc->vcpu_list);
+    /* storing dd's aaf_dom * into avc->dom */
     avc->dom = dd;
+    avc->deadline_abs = 0;
+    avc->deadline_rel = 0;
     /* 
      * To be initialized:
      * AAF_dom *dom;
