@@ -54,25 +54,36 @@ printk("Checking of '%s' failed at line %d of file %s\n", \
 #define AAF_COMP_MIN (MICROSECS(5))
 #define CALCULATE_W(level) \
 			(1.0/POWER(2,level))
-#define AAF_DOM(_dom) ( \
-			(struct AAF_dom *)(_dom)->sched_priv)
 #define APPROX_VAL(val) (floor(val))
+
+
 /* can freely access the global data pointer coming from struct scheduler */
 /* Hence typecasting it to type struct AAF_private_info */
 #define AAF_PRIV_INFO(_d) (\
 				(struct AAF_private_info *)(_d)->sched_data)
 #define AAF_PCPU(_pc) \
 		((struct aaf_pcpu *)per_cpu(schedule_data,_pc).sched_priv)
+#define AAF_DOM(_dom) ( \
+			(struct AAF_dom *)(_dom)->sched_priv)
 
 /****************************Definition of Structures**************************************/
 
 struct AAF_private_info
 {
-    /* global lock for the scheduler */
-    spinlock_t lock;
-    int vcpu_count;
-    cpumask_t cpus; /* cpumask_t for all available physical CPUs */
-    struct list_head ndom; /* Domains in the system */
+	/*
+	* Variables:
+	* sched_lock:	Spinlock for the scheduler.
+	* cpus:			cpumask_t for all available physical CPUs.
+	* ndom:			A linked list that track how many domains are under the control of this scheduler.
+	* 
+	* par_count:	Partition count, not used yet.
+	*/
+
+    spinlock_t sched_lock;
+    cpumask_t cpus;
+    struct list_head ndom;
+
+    int par_count;
 };
 
 struct AAF_pcpu
@@ -132,6 +143,36 @@ struct AAF_dom
     spinlock_t dom_lock;
 }
 
+struct AAF_partition
+{
+	/*
+	* Variables:
+	* par_id:		The partition id.
+	* vcpu_list:	The head of the linked list holding vcpus.
+	* ava:			Availability factor of the partition.
+	* reg:			Regularity of the partition.
+	* par_lock:		Spinlock for the partition.
+	*/
+
+	unsigned int par_id;
+	struct list_head vcpu_list;
+	double ava;
+	int reg;
+	spinlock_t par_lock;
+}
+
+struct time_slice
+{
+	/*
+	* Variables:
+	* time_list:	An element that binds it to the linked list, the head of which is in AAF_pcpu.
+	* index:		The index of this time slice.
+	* par_ptr:		The pointer of the partition this time slice will be served for.
+	*/
+	struct list_head time_list;
+	int index;
+	struct AAF_partition *par_ptr;
+}
 
 
 
