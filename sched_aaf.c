@@ -149,6 +149,7 @@ struct AAF_partition
 	* Variables:
 	* par_id:		The partition id.
 	* vcpu_list:	The head of the linked list holding vcpus.
+	* vcpu_now:		The pointer showing where the system is in the linked list.
 	* ava:			Availability factor of the partition.
 	* reg:			Regularity of the partition.
 	* par_lock:		Spinlock for the partition.
@@ -156,6 +157,7 @@ struct AAF_partition
 
 	unsigned int par_id;
 	struct list_head vcpu_list;
+	struct list_head *vcpu_now;
 	double ava;
 	int reg;
 	spinlock_t par_lock;
