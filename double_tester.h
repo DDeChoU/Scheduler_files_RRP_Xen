@@ -1,193 +1,165 @@
-#include <stdio.h>
+#include <xen/sched.h>
+#include <xen/sched-if.h>
+#include <xen/softirq.h>
+#include <xen/keyhandler.h>
+#include <xen/trace.h>
+#include <xen/lib.h>
+#include <xen/time.h>
+#include <xen/domain.h>
+#include <xen/init.h>
+#include <xen/config.h>
+#include <xen/event.h>
+#include <xen/perfc.h>
+#include <xen/errno.h>
+#include <xen/cpu.h>
+#include <xen/guest_access.h>
 #define TWO_PWR(x) (1<<(x))
+typedef struct {
+int x;
+int y;
+}db;
 
-struct db
+s_time_t gcd(s_time_t  a, s_time_t b)
 {
-	/*The result double re = x/y*/
-	int x;
-	int y;
-};
-int gcd(int a, int b)
-{
-	int temp;
-	if(a<b)
-	{
-		temp = a;
-		a = b;
-		b = temp;
-	}
-	while(b!=0)
-	{
-		temp = a%b;
-		a = b;
-		b = temp;
-	}
-	return a;
-}
-void reduce(struct db* a)
-{
-	int g = gcd(a->x, a->y);
-	a->x /= g;
-	a->y /= g;
+s_time_t temp;
+  if(a<b)
+ {
+   temp = a; 
+   a=b; 
+   b=temp;
+ }
+ while(b!=0)
+   { temp = a%b;
+      a = b;
+     b = temp;
+   }
+   return a;
 }
 
-void add(struct db* a, struct db* b, struct db* result)
+void reduce(db *a)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->y + b->x*a->y;
-	//reduce(result);
+  int g = gcd(a->x, a->y);
+  a->x = a->x/g;
+  a->y = a->y/g;
 }
 
-
-void minus(struct db*a, struct db* b, struct db* result)
+void add(db *a, db *b, db *result)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->y - b->x*a->y;
-	//reduce(result);
+result->y = (a->y)*(b->y);
+result->x = (a->x*b->y)+(b->x*a->y);
+reduce(result); /* to bring it down to simpler result, if numerator and 
+denominator are furhter divisible with one another */
 }
 
-void mult(struct db*a, struct db*b, struct db* result)
+void sub(db *a, db *b, db *result)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->x;
-	//reduce(result);
+result->x = (a->x*b->y)-(b->x*a->y);
+result->y = a->y*b->y;
+reduce(result);
 }
 
-void div(struct db*a, struct db*b, struct db* result)
+void mult(db *a, db *b, db * result)
 {
-	result->y = a->y*b->x;
-	result->x = a->x*b->y;
-	//reduce(result);
+result->y = a->y*b->y;
+result->x = a->x*b->x;
+reduce(result);
 }
 
-/*
-int equal(struct db*a, struct db*b)
+void div(db *a, db *b, db *result)
 {
-	struct db temp;
-	minus(a,b,&temp);
-	if(temp.x<0)
-		minus(b,a,&temp);
-	if(temp.y/temp.x>10000000)
-		return 1;
-}
-*/
-
-int equal(struct db *a, struct db *b)
-{
-	if(a->x*b->y == b->x*a->y)
-		return 0;
-	else 
-		return -1;
-}
-
-void assign(struct db*a, struct db*b)
-{
-	a->x = b->x;
-	a->y = b->y;
-}
-
-void ln(struct db* in, struct db* result)
-{
-	struct db num1, num2, frac, denom, term, sum, old_num, temp;
-	old_num.x = 0; old_num.y = 1;
-	num1.y = in->y; num2.y = in->y;
-	num1.x = in->x - in->y; num2.x = in->x + in->y;
-	div(&num1, &num2, &num1);//calculate (x-1)/(x+1) and put that into num1
-	mult(&num1, &num1, &num2);
-	denom.x = denom.y = 1;
-	assign(&frac, &num1);
-	assign(&term, &frac);
-	assign(&sum, &term);
-
-	while(!equal(&sum, &old_num))
-	{
-		assign(&old_num, &sum);
-		denom.x += 2*denom.y;
-		mult(&frac, &num2, &frac);
-		//printf("%d/%d\n", frac.x, frac.y);
-		div(&frac,&denom, &temp);
-		add(&sum, &temp, &sum);
-		printf("%d/%d\n", sum.x, sum.y);
-		printf("%d/%d\n", old_num.x, old_num.y);
-	}
-	temp.x = 2; temp.y = 1;
-	mult(&sum, &temp, result);
-
+result->y = a->y*b->x;
+result->x = a->x*b->y;
+reduce(result);
 }
 
 
-double ln_in_double(double x)
+int equal(db *a,db *b)
 {
-    double old_sum=0.0;
-    double number1 = (x-1)/(x+1);
-    double number_2 = number1*number1;
-    double denom = 1.0;
-    double frac = number1;
-    double term = frac;
-    double sum = term;
-
-    while(sum!= old_sum)
-    {
-    old_sum=sum;
-    denom+=2.0;
-    frac*=number_2;
-    //printf("%f\n", frac);
-    sum+= frac/denom;
-    //printf("%f\n", denom);
-    }
-    return 2.0*sum;
+if(a->x*b->y == b->x*a->y)
+	return 0;
+else
+	return -1;
 }
 
-struct db number_calc(struct db num, int k)
+void assign(db *a, db *b)
 {
-struct db result,num1,result1,result2,result_final;
+a->x = b->x;
+a->y = b->y;
+}
+
+void ln(db *in, db *result)
+{
+ db num1,num2,frac,denom,term,sum,old_num,temp;
+ old_num.x = 0; 
+ old_num.y = 1;
+ num1.y = in->y;
+ num2.y =  in->y;
+ num1.x = in->x - in->y;
+ num2.x = in->x + in->y;
+ div(&num1, &num2, &num1);
+ mult(&num1,&num1, &num2);
+ denom.x = denom.y = 1;
+ assign(&frac, &num1);
+ assign(&term, &frac);
+ assign(&sum, &term);
+ while(!equal(&sum, &old_num))
+{
+ assign(&old_num, &sum);
+ denom.x += 2*denom.y;
+ mult(&frac, &num2, &frac);
+ div(&frac, &num2, &frac);
+ add(&sum, &temp, &sum);
+ printk("Sum : %d/%d\n",sum.x, sum.y);
+ printk("Old Number: %d/%d\n",old_num.x, old_num.y);
+}
+temp.x =2; 
+temp.y = 1;
+mult(&sum,&temp,result);
+}
+
+/* db num fed as argument ie availability factor of partition */
+db number_calc(db num, int k)
+{
+db result,num1,result1,result2,result_final,result3,result4;
 int x=1,y=2;
 num1.x = x;
 num1.y = y;
 /*ln(&num1,&result);*/ /* calculates ln(10) */
 ln(&num,&result); /* calculates ln(alpha) */
-printf("The result is %d\n",(result.y));
 ln(&num1,&result1); /*calculates ln(0.5) */
-printf("The result1 is %d\n",(result1.x));
 div(&result,&result1,&result2); /* caluculates ln(alpha)/ln(0.5) */
- printf("The result2 Denom is %d\n",(result2.y));
- printf("The result2 Numerator is %d\n",(result2.x));
 int p=1;
-struct db num3;
+db num3;
 num3.x=p;
-float number;
-//if(num.x == 0) //checks for alpha equals 0
-//	free(num); 
-
-if(num.x>0 && num.y>0 && num.x<num.y && k==1) //Tests for alpha between 0 and 1
-	// K condition can be passed as an argument (if needed)
+int number;
+if(num.x>0 && num.y>0 && num.x<num.y &&  k ==1) /* If alpha>0 and k=1 */
 {
-number = (result2.x/(double)result2.y);
-printf("The number is: %f\n",number);
-num3.y = TWO_PWR((int)number);
-return(num3);
+	/* Applying a floor function to get the lower bound */
+	number = (int)(result2.x/result2.y);
+	num3.y = TWO_PWR(number);
+	return(num3);
 }
 
 else
 {
-	number = ((result2.x)/(double)result2.y)+1; //mimicking ceil by adding 1 to the result
-	num3.y = TWO_PWR((int)number);
-	return(num3);
+  	/* Applying a ceil function to get an upper bound */
+   	number = (int)((result2.x/result2.y)+1);
+  	num3.y = TWO_PWR(number);
+	sub(&num,&num3,&result3);
+  	result4 = number_calc(result3,k-1);
+  	add(&result4,&num3,&result_final);
+ 	return(result_final);/* num3 has 1 in numerator and 2^(n) in the denominator */
 }
 }
+
 
 /*
 int main()
 {
-	double x, re;
-	struct db x_in,result;
-	x = 0.5;
-	x_in.x = 1; x_in.y = 2;
-	printf("%f\n", ln_in_double(x));
-	ln(&x_in, &result);
-	re = result.x/(double)result.y;
-	printf("%f\n", re);
-
-	return 0;
+db x_in,result;
+x_in.x =1;
+x_in.y =2;
+ln(&x_in,&result);
+return 0;
 }
 */
