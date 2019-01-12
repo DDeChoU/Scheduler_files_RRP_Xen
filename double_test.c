@@ -1,15 +1,15 @@
 #include <stdio.h>
-
+#define MAX_INT 100000
 
 struct db
 {
 	/*The result double re = x/y*/
-	int x;
-	int y;
+	long x;
+	long y;
 };
-int gcd(int a, int b)
+long gcd(long a, long b)
 {
-	int temp;
+	long temp;
 	if(a<b)
 	{
 		temp = a;
@@ -19,55 +19,110 @@ int gcd(int a, int b)
 	while(b!=0)
 	{
 		temp = a%b;
+		//printf("Temp now is: %d", temp);
 		a = b;
 		b = temp;
 	}
+	//printf("gcd is: (%d)\n", a);
 	return a;
 }
+/*
+	Keep integers smaller than a certain value in function reduce
+	keep denominators positive.
+*/
 void reduce(struct db* a)
 {
-	int g = gcd(a->x, a->y);
+	if(a->x==0)
+	{
+		a->y = 1;
+		return;
+	}
+	long g = gcd(a->x, a->y);
 	a->x /= g;
 	a->y /= g;
+
+	int absx = a->x>0?a->x:-a->x;
+	int absy = a->y>0?a->y:-a->y;
+	int sign = 1;
+	while(absx>=MAX_INT || absy >= MAX_INT)
+	{
+		if(absy>=MAX_INT)
+		{
+			if(absy%2!=0)
+				a->y -= sign;
+			if(absx%2!=0)
+				a->x += sign;
+		}
+		else if(absx>= MAX_INT)
+		{
+			if(absx%2!=0)
+				a->x += sign;
+			if(absy%2!=0&& a->y-sign!=0)
+				a->y -= sign;
+		}
+
+		sign = - sign;
+		g = gcd(a->x, a->y);
+		a->x /= g;
+		a->y /= g;
+		absx = a->x>0?a->x:-a->x;
+		absy = a->y>0?a->y:-a->y;
+	}
+	if(a->y<0)
+	{
+		a->x = - a->x;
+		a->y = - a->y;
+		
+	}
+	//printf("After number control, the fraction is now: %d, %d\n", a->x, a->y);
+	//while(absx)
+
+	//printf("After reduction, the fraction is now: %d, %d\n", a->x, a->y);
 }
 
 void add(struct db* a, struct db* b, struct db* result)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->y + b->x*a->y;
+	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	result->y = ay*by;
+	result->x = ax*by + bx*ay;
 	reduce(result);
 }
 
 
 void minus(struct db*a, struct db* b, struct db* result)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->y - b->x*a->y;
+	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	result->y = ay*by;
+	result->x = ax*by - bx*ay;
 	reduce(result);
 }
 
 void mult(struct db*a, struct db*b, struct db* result)
 {
-	result->y = a->y*b->y;
-	result->x = a->x*b->x;
+	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	result->y = ay*by;
+	result->x = ax*bx;
 	reduce(result);
 }
 
 void div(struct db*a, struct db*b, struct db* result)
 {
-	result->y = a->y*b->x;
-	result->x = a->x*b->y;
+	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	result->y = ay*bx;
+	result->x = ax*by;
 	reduce(result);
 }
 
 int equal(struct db*a, struct db*b)
 {
+	//printf("Comparing (%d,%d) and (%d, %d)\n", a->x, a->y,b->x, b->y);
 	struct db temp;
 	minus(a,b,&temp);
 	if(temp.x<0)
 		minus(b,a,&temp);
-	if(temp.y/temp.x>10000000)
+	if(temp.x==0 || temp.y/temp.x>1000000 )
 		return 1;
+	return 0;
 }
 
 void assign(struct db*a, struct db*b)
@@ -89,16 +144,25 @@ void ln(struct db* in, struct db* result)
 	assign(&term, &frac);
 	assign(&sum, &term);
 
-	while(!equal(&sum, &old_num))
+	while(equal(&sum, &old_num)==0)
 	{
+		//printf("No Exception yet!");
 		assign(&old_num, &sum);
 		denom.x += 2*denom.y;
 		mult(&frac, &num2, &frac);
-		//printf("%d/%d\n", frac.x, frac.y);
+
+		double print_d = (double)frac.x/frac.y;
+		//printf("frac is: %f****", print_d);
+
+		//printf("frac is: %d/%d, ", frac.x, frac.y);
 		div(&frac,&denom, &temp);
 		add(&sum, &temp, &sum);
-		printf("%d/%d\n", sum.x, sum.y);
-		printf("%d/%d\n", old_num.x, old_num.y);
+
+		print_d = (double)sum.x/sum.y;
+		//printf("sum is: %f****", print_d);
+		//printf("sum is: %d/%d\n", sum.x, sum.y);
+		//getchar();
+		//printf("%d/%d\n", old_num.x, old_num.y);
 	}
 	temp.x = 2; temp.y = 1;
 	mult(&sum, &temp, result);
@@ -118,12 +182,12 @@ double ln_in_double(double x)
 
     while(sum!= old_sum)
     {
-    old_sum=sum;
-    denom+=2.0;
-    frac*=number_2;
-    //printf("%f\n", frac);
-    sum+= frac/denom;
-    //printf("%f\n", denom);
+	    old_sum=sum;
+	    denom+=2.0;
+	    frac*=number_2;
+	    //printf("frac is: %f, ", frac);
+	    sum+= frac/denom;
+	    //printf("sum is: %f\n", sum);
     }
     return 2.0*sum;
 }
@@ -132,12 +196,11 @@ int main()
 {
 	double x, re;
 	struct db x_in,result;
-	x = 0.5;
-	x_in.x = 1; x_in.y = 2;
+	x = 1.3333;
+	x_in.x = 4; x_in.y = 3;
 	printf("%f\n", ln_in_double(x));
 	ln(&x_in, &result);
 	re = result.x/(double)result.y;
 	printf("%f\n", re);
-
 	return 0;
 }

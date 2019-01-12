@@ -477,35 +477,35 @@ static void AAF_free_domdata(const struct scheduler *ops,void *data)
 * initialized and allocted in init_dom_data */
 static double aaf_calc(doms->alpha,doms->k))
 {
-double result;
-int number;
-if(doms->alpha==0)
-	return 0;
-if(doms->alpha>0 && doms->k==1)
-{
-	number = floor(LOG10(doms->alpha)/LOG10(0.5));
-	return (1/PWR_TWO(number));
-}
-else
-{
-	number= ceil(LOG10(doms->alpha)/LOG10(0.5));
-	result=(1/PWR_TWO(number));
-	return(aaf_calc((doms->alpha)-result),(doms->k)-1)+result);
-}
+    double result;
+    int number;
+    if(doms->alpha==0)
+    	return 0;
+    if(doms->alpha>0 && doms->k==1)
+    {
+    	number = floor(LOG10(doms->alpha)/LOG10(0.5));
+    	return (1/PWR_TWO(number));
+    }
+    else
+    {
+    	number= ceil(LOG10(doms->alpha)/LOG10(0.5));
+    	result=(1/PWR_TWO(number));
+    	return(aaf_calc((doms->alpha)-result),(doms->k)-1)+result);
+    }
 }
 
 /* finds Max AAF value of all the domains in the system */
 static double findmaxAAF(struct AAF_dom *domains)
 {
-double result=0;
-list_head *iteration;
- list_for_each(iteration,&domains->element)
-{
-	doms=list_entry(iterator,struct AAF_dom,element);
-	if((domains->aaf_calc(domains->alpha,domains->k))>0 && (domains->aaf_calc(domains->alpha,domains->k) >result))
-		result = domains->aaf_calc(domains->alpha,domains->k);
-}
-return result;
+    double result=0;
+    list_head *iteration;
+     list_for_each(iteration,&domains->element)
+    {
+    	doms=list_entry(iterator,struct AAF_dom,element);
+    	if((domains->aaf_calc(domains->alpha,domains->k))>0 && (domains->aaf_calc(domains->alpha,domains->k) >result))
+    		result = domains->aaf_calc(domains->alpha,domains->k);
+    }
+    return result;
 }
 /* Function to find First Available Time slice */
 int findFirstAvailableTimeSlice()
@@ -520,31 +520,31 @@ int findFirstAvailableTimeSlice()
 #ifndef __AAF_SINGLE__
 static inline void aaf_single(struct AAF_dom *domains)
 {
-struct list_head *iterator;
-struct timeslices slices;
-struct AAF_vcpu *vcpu_s;
-struct AAF_dom *doms;
-doms->level=0;
-/* spans across all the domains */
-list_for_each(iterator,&domains->element)
-{
-	doms=list_entry(iterator,struct AAF_dom,element);
-	while(!list_empty_careful(doms->element))
-	{
-		w = PWR_TWO(level);
-		if((doms->aaf_calc(doms->alpha,doms->k))>w || 
-					(doms->aaf_calc(doms->alpha,doms->k)==w))
-			{
-				/* storing timeslices to partition at level */
-				vcpu_s->comp_time_slice=doms->level
-				doms->aaf_calc(doms->alpha,doms->k)-=w;
-				if(doms->aaf_calc(doms->alpha,doms->k)==0)
-					/* if A_i==0 then deduct a partition */
-					list_del(&doms->element);
-			 }
-		(doms->level)++;
-}
-}
+    struct list_head *iterator;
+    struct timeslices slices;
+    struct AAF_vcpu *vcpu_s;
+    struct AAF_dom *doms;
+    doms->level=0;
+    /* spans across all the domains */
+    list_for_each(iterator,&domains->element)
+    {
+    	doms=list_entry(iterator,struct AAF_dom,element);
+    	while(!list_empty_careful(doms->element))
+    	{
+    		w = PWR_TWO(level);
+    		if((doms->aaf_calc(doms->alpha,doms->k))>w || 
+    					(doms->aaf_calc(doms->alpha,doms->k)==w))
+    			{
+    				/* storing timeslices to partition at level */
+    				vcpu_s->comp_time_slice=doms->level
+    				doms->aaf_calc(doms->alpha,doms->k)-=w;
+    				if(doms->aaf_calc(doms->alpha,doms->k)==0)
+    					/* if A_i==0 then deduct a partition */
+    					list_del(&doms->element);
+    			 }
+    		(doms->level)++;
+        }
+    }
 }
 #else
 static inline void aaf_single(struct AAF_dom *doms, s_time_t hp)
