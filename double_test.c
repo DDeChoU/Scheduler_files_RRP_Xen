@@ -200,8 +200,8 @@ int main()
 {
 	double x, re;
 	struct db x_in,result;
-	x = 0.09630963;
-	x_in.x = 107; x_in.y = 1111;
+	x_in.x = 9237; x_in.y = 13777;
+	x = (double)x_in.x/x_in.y;
 	printf("%f\n", ln_in_double(x));
 	ln(&x_in, &result);
 	re = result.x/(double)result.y;
