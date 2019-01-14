@@ -152,17 +152,17 @@ void ln(struct db* in, struct db* result)
 		mult(&frac, &num2, &frac);
 
 		double print_d = (double)frac.x/frac.y;
-		//printf("frac is: %f****", print_d);
+		printf("frac is: %f****", print_d);
 
-		//printf("frac is: %d/%d, ", frac.x, frac.y);
+		printf("frac is: %d/%d, ", frac.x, frac.y);
 		div(&frac,&denom, &temp);
 		add(&sum, &temp, &sum);
 
 		print_d = (double)sum.x/sum.y;
-		//printf("sum is: %f****", print_d);
-		//printf("sum is: %d/%d\n", sum.x, sum.y);
-		//getchar();
-		//printf("%d/%d\n", old_num.x, old_num.y);
+		printf("sum is: %f****", print_d);
+		printf("sum is: %d/%d\n", sum.x, sum.y);
+		getchar();
+		printf("%d/%d\n", old_num.x, old_num.y);
 	}
 	temp.x = 2; temp.y = 1;
 	mult(&sum, &temp, result);
@@ -185,9 +185,9 @@ double ln_in_double(double x)
 	    old_sum=sum;
 	    denom+=2.0;
 	    frac*=number_2;
-	    //printf("frac is: %f, ", frac);
+	    printf("frac is: %f, ", frac);
 	    sum+= frac/denom;
-	    //printf("sum is: %f\n", sum);
+	    printf("sum is: %f\n", sum);
     }
     return 2.0*sum;
 }
@@ -196,8 +196,8 @@ int main()
 {
 	double x, re;
 	struct db x_in,result;
-	x = 1.3333;
-	x_in.x = 4; x_in.y = 3;
+	x = 0.09630963;
+	x_in.x = 107; x_in.y = 1111;
 	printf("%f\n", ln_in_double(x));
 	ln(&x_in, &result);
 	re = result.x/(double)result.y;
