@@ -4,12 +4,12 @@
 struct db
 {
 	/*The result double re = x/y*/
-	long x;
-	long y;
+	long long x;
+	long long y;
 };
-long gcd(long a, long b)
+long long gcd(long long a, long long b)
 {
-	long temp;
+	long long temp;
 	if(a<b)
 	{
 		temp = a;
@@ -19,11 +19,11 @@ long gcd(long a, long b)
 	while(b!=0)
 	{
 		temp = a%b;
-		//printf("Temp now is: %d", temp);
+		//printf("Temp now is: %lld", temp);
 		a = b;
 		b = temp;
 	}
-	//printf("gcd is: (%d)\n", a);
+	//printf("gcd is: (%lld)\n", a);
 	return a;
 }
 /*
@@ -32,18 +32,20 @@ long gcd(long a, long b)
 */
 void reduce(struct db* a)
 {
+	
 	if(a->x==0)
 	{
 		a->y = 1;
 		return;
 	}
-	long g = gcd(a->x, a->y);
+	long long g = gcd(a->x, a->y);
 	a->x /= g;
 	a->y /= g;
 
-	int absx = a->x>0?a->x:-a->x;
-	int absy = a->y>0?a->y:-a->y;
+	long long absx = a->x>0?a->x:-a->x;
+	long long absy = a->y>0?a->y:-a->y;
 	int sign = 1;
+	//printf("Inside the reduce(): %lld, %lld***", absx, absy);
 	while(absx>=MAX_INT || absy >= MAX_INT)
 	{
 		if(absy>=MAX_INT)
@@ -68,30 +70,32 @@ void reduce(struct db* a)
 		absx = a->x>0?a->x:-a->x;
 		absy = a->y>0?a->y:-a->y;
 	}
+	//printf("After control: %ld, %ld***", a->x, a->y);
 	if(a->y<0)
 	{
-		a->x = - a->x;
+		a->x = - a->x;	
 		a->y = - a->y;
-		
 	}
-	//printf("After number control, the fraction is now: %d, %d\n", a->x, a->y);
+	//printf("After abs: %ld, %ld\n", a->x, a->y);
+	//printf("After number control, the fraction is now: %lld, %lld\n", a->x, a->y);
 	//while(absx)
 
-	//printf("After reduction, the fraction is now: %d, %d\n", a->x, a->y);
+	//printf("After reduction, the fraction is now: %lld, %lld\n", a->x, a->y);
 }
 
 void add(struct db* a, struct db* b, struct db* result)
 {
-	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	long long ax = a->x, ay = a->y, bx = b->x, by = b->y;
 	result->y = ay*by;
 	result->x = ax*by + bx*ay;
+	//printf("In the add operation: %lld, %lld \n", result->x, result->y);
 	reduce(result);
 }
 
 
 void minus(struct db*a, struct db* b, struct db* result)
 {
-	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	long long ax = a->x, ay = a->y, bx = b->x, by = b->y;
 	result->y = ay*by;
 	result->x = ax*by - bx*ay;
 	reduce(result);
@@ -99,7 +103,7 @@ void minus(struct db*a, struct db* b, struct db* result)
 
 void mult(struct db*a, struct db*b, struct db* result)
 {
-	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	long long ax = a->x, ay = a->y, bx = b->x, by = b->y;
 	result->y = ay*by;
 	result->x = ax*bx;
 	reduce(result);
@@ -107,7 +111,7 @@ void mult(struct db*a, struct db*b, struct db* result)
 
 void div(struct db*a, struct db*b, struct db* result)
 {
-	long ax = a->x, ay = a->y, bx = b->x, by = b->y;
+	long long ax = a->x, ay = a->y, bx = b->x, by = b->y;
 	result->y = ay*bx;
 	result->x = ax*by;
 	reduce(result);
@@ -115,7 +119,7 @@ void div(struct db*a, struct db*b, struct db* result)
 
 int equal(struct db*a, struct db*b)
 {
-	//printf("Comparing (%d,%d) and (%d, %d)\n", a->x, a->y,b->x, b->y);
+	//printf("Comparing (%lld,%lld) and (%lld, %lld)\n", a->x, a->y,b->x, b->y);
 	struct db temp;
 	minus(a,b,&temp);
 	if(temp.x<0)
@@ -152,17 +156,17 @@ void ln(struct db* in, struct db* result)
 		mult(&frac, &num2, &frac);
 
 		double print_d = (double)frac.x/frac.y;
-		printf("frac is: %f****", print_d);
+		//printf("frac is: %f****", print_d);
 
-		printf("frac is: %d/%d, ", frac.x, frac.y);
+		//printf("frac is: %lld/%lld, ", frac.x, frac.y);
 		div(&frac,&denom, &temp);
 		add(&sum, &temp, &sum);
 
 		print_d = (double)sum.x/sum.y;
-		printf("sum is: %f****", print_d);
-		printf("sum is: %d/%d\n", sum.x, sum.y);
-		getchar();
-		printf("%d/%d\n", old_num.x, old_num.y);
+		//printf("sum is: %f****", print_d);
+		//printf("sum is: %lld/%lld\n", sum.x, sum.y);
+		//getchar();
+		//printf("%lld/%lld\n", old_num.x, old_num.y);
 	}
 	temp.x = 2; temp.y = 1;
 	mult(&sum, &temp, result);
@@ -185,9 +189,9 @@ double ln_in_double(double x)
 	    old_sum=sum;
 	    denom+=2.0;
 	    frac*=number_2;
-	    printf("frac is: %f, ", frac);
+	    //printf("frac is: %f, ", frac);
 	    sum+= frac/denom;
-	    printf("sum is: %f\n", sum);
+	    //printf("sum is: %f\n", sum);
     }
     return 2.0*sum;
 }
