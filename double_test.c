@@ -1,5 +1,7 @@
 #include <stdio.h>
-#define MAX_INT 100000
+#include <time.h>
+#include <stdlib.h>
+#define MAX_INT 1000000
 
 struct db
 {
@@ -109,7 +111,7 @@ void mult(struct db*a, struct db*b, struct db* result)
 	reduce(result);
 }
 
-void div(struct db*a, struct db*b, struct db* result)
+void division(struct db*a, struct db*b, struct db* result)
 {
 	long long ax = a->x, ay = a->y, bx = b->x, by = b->y;
 	result->y = ay*bx;
@@ -141,7 +143,7 @@ void ln(struct db* in, struct db* result)
 	old_num.x = 0; old_num.y = 1;
 	num1.y = in->y; num2.y = in->y;
 	num1.x = in->x - in->y; num2.x = in->x + in->y;
-	div(&num1, &num2, &num1);//calculate (x-1)/(x+1) and put that into num1
+	division(&num1, &num2, &num1);//calculate (x-1)/(x+1) and put that into num1
 	mult(&num1, &num1, &num2);
 	denom.x = denom.y = 1;
 	assign(&frac, &num1);
@@ -159,7 +161,7 @@ void ln(struct db* in, struct db* result)
 		//printf("frac is: %f****", print_d);
 
 		//printf("frac is: %lld/%lld, ", frac.x, frac.y);
-		div(&frac,&denom, &temp);
+		division(&frac,&denom, &temp);
 		add(&sum, &temp, &sum);
 
 		print_d = (double)sum.x/sum.y;
@@ -196,16 +198,49 @@ double ln_in_double(double x)
     return 2.0*sum;
 }
 
+void test()
+{
+	double mistake_range = 0.01;
+	int counter = 0, test_times = 10000;
+	srand(time(NULL));
+	for(int i=0;i<test_times;i++)
+	{
+		struct db x_in, result;
+		double x, re_db, re;
+		x_in.x = rand()%MAX_INT;
+		x_in.y = rand()%MAX_INT;
+		reduce(&x_in);
+		x = x_in.x/(double)x_in.y;
+		ln(&x_in, &result);
+		re_db = result.x/(double)result.y;
+		re = ln_in_double(x);
+		if(re_db-re> mistake_range|| re_db-re>mistake_range)
+		{
+			/* 
+			//Output the errors for review.
+			printf("Mistake out of range for: %lld/%lld ", x_in.x, x_in.y);
+			printf("%f ****** ", re);
+			printf("%f\n", re_db);
+			*/
+			counter += 1;
+		}
+
+	}
+	printf("The error rate is: %f\n", (double)counter/test_times);
+}
+
 int main()
 {
+	test();
+	/*
 	double x, re;
 	struct db x_in,result;
-	//x_in.x = 1127; x_in.y = 11110;
+
 	scanf("%lld %lld", &x_in.x, &x_in.y);
 	x = (double)x_in.x/x_in.y;
 	printf("%f\n", ln_in_double(x));
 	ln(&x_in, &result);
 	re = result.x/(double)result.y;
-	printf("%f\n", re);
+	printf("%f\n", re);*/
 	return 0;
 }
