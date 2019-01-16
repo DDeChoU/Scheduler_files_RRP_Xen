@@ -489,6 +489,47 @@ static void *AAF_free_domdata(const struct scheduler *ops,void *dom)
 #else
 #endif
 
+/************************ AAF_PRIVATE INIT AND DENIT  ************************
+
+    * NOTE ::: DO NOT initialize the instance of the strcut scheduler with a const when it is passed as an 
+	   ::: argument to AAF_init and AAF_deinit as we dock and undock it with AAF_private_info 
+
+	*ops: pointer to the struct scheduler
+	***** RETURN *****
+	* 0 : success
+	* !0: Error in initialization  */
+static int AAF_init(struct scheduler *ops)
+{
+	struct AAF_private_info *prv;
+	prv = xzalloc(struct AAF_private_info);
+	if(prv == NULL)	
+	{
+		return -ENOMEM; /* Return nothing if  AAF_private_info is void  */
+	}
+
+	/* Now dock the AAF_private_info to the scheduler's sched_data provided AAF_private is not empty */
+	ops->sched_data = prv;
+	/* Global lock init */
+	spin_lock_init(&prv->lock);
+	INIT_LIST_HEAD(&prv->ndom); 
+	INIT_LIST_HEAD(&prv->vcpu_list);
+	return 0;
+}
+
+/********************* DEINITIALIZATION OF THE INSTANCE OF A SCHEDULER ***********
+	*ops: Pointer to the struct scheduler
+	****** RETURN ********
+	* none */
+static void AAF_deinit( struct scheduler *ops)
+{
+	xfree(AAF_PRIV_INFO(ops));
+	ops->sched_data = NULL; /* To ensure that the current scheduler is 
+				 * properly undocked from the global scheduler */
+}
+
+
+
+
 /******************************************************************************************/
 /* Work is in progress, do not release #ifdefs until the functions are fully developed */
 #ifndef __AAF_SINGLE__
