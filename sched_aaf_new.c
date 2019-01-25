@@ -34,10 +34,6 @@
 #ifndef CHECK(_p)
 
 #define CHECK(_p) \
-do{ \
-if(!_p) printk("Checking of '%s' failed at line %d of file %s\n", \
-#_p,__LINE__,__FILE__);	\
-} while(0) 
 
 #else
 #define CHECK(_p) (void 0)
@@ -71,6 +67,12 @@ if(!_p) printk("Checking of '%s' failed at line %d of file %s\n", \
 
 /* To get the idle VCPU for a given PCPU */
 #define IDLE(cpu) (idle_vcpu[cpu])
+
+/* Given a CPU number, retreive its RUNQ */
+#define RUNQ(_cpu) (&AAF_PCPU(_cpu)->runq)
+
+
+	
 
 /****************************Definition of Structures**************************************/
 
@@ -111,10 +113,12 @@ struct AAF_private_info
 
 	*		      whenever this scheduler is called
 	* par_count:	Partition count, not used yet.
+	* hp: 		Have a unique and global hyperperiod for the entire system 
 	*/
 
     spinlock_t lock;
     cpumask_t cpus;
+   s_time_t hp;
     struct list_head ndom;
     struct list_head vcpu_list;
     sched_entry_t schedule[AAF_MAX_DOMAINS_PER_SCHEDULE];
@@ -134,8 +138,8 @@ struct AAF_pcpu
 	*/
 
 	struct list_head time_list;
-	s_time_t hp;
 	struct list_head *time_now; /*pointer to the time_list, so no INIT_LIST_HEAD for this */
+	struct list_head runq /* Maintaining a runQ inside each PCPU */
 };
 
 
@@ -154,8 +158,8 @@ struct AAF_vcpu
 
     struct vcpu *vcpu;
     struct AAF_dom *dom;
-    struct list_head vcpu_list; 
-
+    struct list_head vcpu_list; /* this list binds it to the partition,head of which is in AAF_partition */
+    struct list_head runq_elem; /* VCPU as an element whose Queue is in the PCPU as runQ */ 
     s_time_t deadline_abs;   /*absolute deadline */
     s_time_t deadline_rel;   /*relative deadline */
     s_time_t period;
@@ -176,7 +180,7 @@ struct AAF_dom
     struct domain *dom;
     struct AAF_partition *inter_par;
     struct list_head dom_list;
-    spinlock_t dom_lock;
+   /* spinlock_t dom_lock;*/
 	int k;
 };
 
@@ -193,19 +197,20 @@ struct AAF_partition
 	* reg:			Regularity of the partition.
 	* par_lock:		Spinlock for the partition.
 	* aaf_calc:		Every partition has its own AAF value that is unique to every partition 
+	* partition_list:   	list head of the partitions 
 	*/
  
 	unsigned int par_id;
 	struct list_head vcpu_list;
 	struct list_head *vcpu_now;
+	struct list_head partition_list;
 	/* Alpha re-introduced as an int(x)/int(y) parameter */
 	s_time_t time_slices; /* These parameters come from user end */
 	s_time_t period;
-	
 	db *alpha;
 	int k;
 	spinlock_t par_lock;
-	db * (*aaf_calc)(db *alpha,int k); /*Moved to AAF_partition*/
+	db  (*aaf_calc)(db *alpha,int k); /*Moved to AAF_partition*/
 };
 
 struct time_slice
@@ -218,13 +223,51 @@ struct time_slice
 	*/
 	struct list_head time_list;
 	int index;
-	struct AAF_partition *par_ptr;
+	struct AAF_dom *dom_ptr;
 };
 
 
 /******************************************************************************************/
 
 /****************************Assistance Functions**************************************/
+
+
+/***************** FUNCTION TO RETREIVE A PARTITION GIVEN PARTITION'S DOMAIN ID ********
+	* Since the current setup only supports one Partition per domain,
+	* we can as well make use of the domain_handle to retreive the partition residing in it 
+	* Provide the domain id and the function will return the concerned partition as every domain has only 1 partition */
+
+static struct AAF_partition *get_AAF_par(struct AAF_dom *dom_ptr)
+{
+	
+	/* Iterate through the list of domains to see if it matches dom_id */
+	
+		return dom_ptr->inter_par;
+	
+}
+
+
+/************ SWITCH SCHEDULER FROM CURRENT TO AAF_XEN OF A CPU ***********************
+	* new_ops: pointer to the struct scheduler
+	* cpu: CPU number, the cpu that is changing the scheduler
+	* pdata: Scheduler specific PCPU data
+	* vdata: Scheduler specific VCPU data of the idle VCPU
+	return : NULL **/
+static void AAF_switch(struct scheduler *new_ops, unsigned int cpu, void *pdata, void *vdata)
+{
+	struct schedule_data *sd = &per_cpu(schedule_data, cpu); /* per_cpu returns only one isntance of the struct scheduler */
+	struct AAF_vcpu *vc = vdata; /* Docking arg with this scheduler's vcpu) */
+	struct aaf_pcpu *pc = pdata; /* Docking arg (pdata) with this Scheduler's pcpu struct */
+	/* Assert if AAF's pcpus exist ,vcpus and these vcpus are idle */
+	ASSERT(pc && vc && is_idle_vcpu(vc->vcpu));
+	
+	/* No locks are being put on the scheduler now, will have to, in future ~! */
+	idle_vcpu[cpu]->sched_priv = vdata;
+	/* As we have Struct PCPu, we need to init_pdata while switching scheduler */
+	/* init_pdata retruns the ID of the runQ on the CPU it is running */
+	/* IN PROGRESS -- NEED TO INCLUDE THE RUNQ SWITCHES __ */
+}
+
 
 /********************** FUNCTION TO COMPARE 2 GIVEN DOMAINS **************************
 
@@ -280,22 +323,22 @@ static void update_sched_vcpu(const struct scheduler *ops)
 static s_time_t hyperperiod(struct AAF_partition *par)
 {
 	
-	struct AAF_pcpu *pc;
+	struct AAF_private_info *pv;
 	s_time_t temp_res_num,temp_res_denom;
-	if(pc->hp==0)
+	if(pv->hp==0)
 	{
-		pc->hp = par->alpha->y;
+		pv->hp = par->alpha->y;
 	}
 	else
 	{
 		/* Numerator of the LCM stored in temp_res */
-		temp_res_num = (par->alpha->y)*(pc->hp);
-		temp_res_denom = (gcd(par->alpha->y,pc->hp));
-		pc->hp = (s_time_t)(temp_res_num/temp_res_denom);
+		temp_res_num = (par->alpha->y)*(pv->hp);
+		temp_res_denom = (gcd(par->alpha->y,pv->hp));
+		pv->hp = (s_time_t)(temp_res_num/temp_res_denom);
 
 		/*pc->hp = (par->alpha.period)*(pc->hp)/GCD((par->period),pc->hp);*/
 	}
-	return (pc->hp);
+	return (pv->hp);
 
 	/* provides us with the index of the time slice corresponding to a partition */
 	/*ts->index*/ 
@@ -306,37 +349,122 @@ static s_time_t hyperperiod(struct AAF_partition *par)
 	* int k: Supply regularity 
       ****** Return value ******
 	* returns a struct of type double */
-db *aaf_calc(db *factor,int k)
+db aaf_calc(db *factor,int k)
 {
-	db *result,*result1,*result2,*result3,*result4;
-	db *x_input,*x_out;
-	x_input->x =1;
-	x_input->y =2;
-	x_out->x=1;
+	db result,result1,result2,result3,result4;
+	db x_input,x_out,temp;
+	x_input.x =1;
+	x_input.y =2;
+	x_out.x=1;
 	int number;
 	if(factor->x == 0)
-	{	return NULL;  }
+	{	return;  }
 	if(factor->x>0 && factor->y>0 && k==1)
 	{
-		 ln(factor,result);
-		ln(x_input,result1);
-		division(result,result1,result2); /* result2 has the log10(alpha)/log10(0.5) */
-		number = (int)(result2->x/result2->y); /* gives the floor value */
-		x_out->y=PWR_TWO(number);
+		 ln(factor,&result);
+		ln(&x_input,&result1);
+		division(&result,&result1,&result2); /* result2 has the log10(alpha)/log10(0.5) */
+		number = (int)(result2.x/result2.y); /* gives the floor value */
+		x_out.y=PWR_TWO(number);
 		return x_out; /* Returns 1/2^Number */
 	}
 	
 	else
 	{
-		ln(factor,result);
-		ln(x_input,result1);
-		division(result,result1,result2); /* result2 has the log10(alpha)/log10(0.5) */
-		number =((int)(result2->x/result2->y))+1; /* Gives the ciel value of the result2 */
-		x_out->y=PWR_TWO(number); /* x_out now has 1/2^Number */
-		minus(factor,x_out,result3); /*  performs alpha-result */
-		add(aaf_calc(result3,k-1),x_out,result4); /* Performs AAF((alpha-result),k-1)+result */
+		ln(factor,&result);
+		ln(&x_input,&result1);
+		division(&result,&result1,&result2); /* result2 has the log10(alpha)/log10(0.5) */
+		number =((int)(result2.x/result2.y))+1; /* Gives the ciel value of the result2 */
+		x_out.y=PWR_TWO(number); /* x_out now has 1/2^Number */
+		minus(factor,&x_out,&result3); /*  performs alpha-result */
+		temp = aaf_calc(&result3,k-1);
+		add(&temp,&x_out,&result4); /* Performs AAF((alpha-result),k-1)+result */
 		return result4;
 	}
+}
+
+
+
+/************************ AAF_SINGLE_ALGORITHM *************************
+	* Input: Partition Set 
+	* Returns sorted list of time slices 
+**/
+
+static inline void AAF_single(struct AAF_dom *dom, const struct scheduler *ops)
+{
+	struct AAF_private_info *prv;
+	double maxaaf;
+	int w=1;
+	s_time_t firstAvailableTimeSlice=0;
+	db temp,temp1;
+	/* Function hyperperiod takes in a pointer to the partition, so we need to iterate it through
+	* the list of partitions and calculate cumulative hyperperiod of the system */
+	
+	/* iterate through the list of domains and collect the cumulative hyperperiod of all the 
+	 * partitions residing in every domain */
+	int level=0,counter,i=0,hyperp;
+	int *distance;
+	s_time_t *t_p_counter;
+	s_time_t **t_p;
+	db p;
+	p.x=1;
+	temp.x=1;
+	temp.y=10000;
+		/* iterates through the list of domains */
+		list_for_each_entry(dom,&AAF_PRIV_INFO(ops)->ndom,dom_list)
+			{	
+			prv->hp = hyperperiod(dom->inter_par); /* cumulative hp of all the domains */
+			counter++; /* Gives the final count value of num of
+							    * domains */
+			}
+	t_p_counter = (s_time_t*)malloc(counter*sizeof(s_time_t));
+	distance = (s_time_t*)malloc(counter*sizeof(s_time_t));
+	/* 1st array assignment of number of domains */
+	/* 2nd array assignment of hyperperiod */
+	hyperp = (int) prv->hp;
+	*t_p=(s_time_t **)malloc(counter*sizeof(s_time_t*));
+	
+	/* Allocating memory to the 2nd dimension of the 2d  array */
+	for(int i=0;i<(counter);i++)
+	{
+		(*t_p)[i] = (s_time_t*)malloc(hyperp*sizeof(s_time_t));
+	}		
+
+
+	while(counter>0)
+	{
+
+				p.y = TWO_PWR(level);
+				w = (int) (p.x/p.y); /* Forced conversion into int */
+				int tsize = w*(int)(prv->hp);
+		/* prv->hp after iterating through all the domains in the environment has a unique and
+	 	 * a final hyperperiod for the entire system now */
+
+                   /* iterate through the list of domains */
+		list_for_each_entry(dom,&AAF_PRIV_INFO(ops)->ndom,dom_list)
+		{
+			int l;
+			int num = (int)(dom->inter_par->aaf_calc(dom->inter_par->alpha,dom->inter_par->k).x);
+			int denom =  (int)(dom->inter_par->aaf_calc(dom->inter_par->alpha,dom->inter_par->k).y);
+			if((int)(num/denom)>=w)
+			{
+				for(int j=1;j<=tsize;j++)
+				{
+				/* firstAvailableTimeSlice ==0 for time being */
+				 t_p[l][t_p_counter[l]++] = 0+(j-1)*(distance[counter]);
+				}
+			/*firstAvailableTimeSlice=findfirstAvailableTimeSlice();*/
+			int x= (int)num/denom; 
+				x-=w;
+			temp1= dom->inter_par->aaf_calc(dom->inter_par->alpha,dom->inter_par->k);
+			if(less_than(&temp1,&temp)==0) 
+				counter--;
+			    	
+			}
+		}
+	level++;
+	}
+
 }
 
 /********************** PICK CPU ************************
@@ -506,7 +634,6 @@ static int AAF_init(struct scheduler *ops)
 	{
 		return -ENOMEM; /* Return nothing if  AAF_private_info is void  */
 	}
-
 	/* Now dock the AAF_private_info to the scheduler's sched_data provided AAF_private is not empty */
 	ops->sched_data = prv;
 	/* Global lock init */
@@ -528,8 +655,92 @@ static void AAF_deinit( struct scheduler *ops)
 }
 
 
+/******************* VCPU INITS AND ALLOCATIONS *********************
+	*ops: pointer to the struct scheduler
+	* vc: pointer to the struct vcpu
+	* void *: A void pointer useful for typecast in future
+	**** RETURN VALUE *********
+	* None: returns nothing ***/
+static void *AAF_alloc_vdata(const struct scheduler *ops, struct vcpu *vc, void *dd)
+{
+	struct AAF_private_info *sched_priv = AAF_PRIV_INFO(ops);
+	 struct AAF_vcpu *vcp;
+	unsigned long flags;
+	unsigned int entry;
+	/* Allocate memory for the AAF_specific scheduler vcpu */
+	vcp = xzalloc(struct AAF_vcpu);
+	if( vcp == NULL)
+		return NULL;
+	INIT_LIST_HEAD(&vcp->vcpu_list);
+	/** docking **/
+	vcp->vcpu = vc;
+	vcp->dom = dd;
+	/* Counter set-up (if necessary ) */
+	SCHED_STAT_CRANK(vcpu_alloc);
+	return vcp;
+}
 
+static void AAF_free_vdata(const struct scheduler *ops, void *priv)
+{
+	struct AAF_vcpu *vc = priv;
+	xfree(vc);
+}
 
+/******************** DO SCHEDULE *****************
+	* ops: pointer to the struct scheduler
+	* now: an s_time_t parameter
+	* task_scheuled : bool_t parameter
+	**** return ***
+	* returns an instance of task slice **/
+static struct task_slice AAF_schedule(const struct scheduler *ops, s_time_t now, bool_t task_scheduled)
+{
+	struct task_slice ret;
+	struct list_head *pos,*pos1;
+	struct time_slice *ts;
+	struct AAF_partition *pars;
+	struct AAF_vcpu *vc,*vcpus=NULL;
+	ret.time = MILLISECS(10);
+	/* FOr starters, we assume there is a partition-time slice table and the index of partition
+	* in that table is merely the Domain ID as for now, we assume each domain has a single partition */
+	unsigned int cpu = smp_processor_id();
+	struct AAF_pcpu *pc = AAF_PCPU(cpu); /* we have access to the struct pcpu with the help of CPU number now */
+	pc->time_now = pc->time_now->next;
+	/* Assuming we have a partition/ domain number in the partition-timeslice table inside of each PCPU */
+	if(pc->time_now == &pc->time_list)
+	{	
+		pc->time_now=pc->time_now->next;
+	}
+	pos=pc->time_now;
+	ts = list_entry(pos, struct time_slice, time_list);
+	pars = get_AAF_par(ts->dom_ptr); /* gets partition */
+	/* A list head */
+	if(list_empty(&pars->vcpu_list))
+		return ret;/*The empty NULL may cause run-time error*/
+	/* We get the VCPU whch is currently the pointer is pointing to */
+	vcpus = list_entry(pars->vcpu_now, struct AAF_vcpu, vcpu_list);
+	pos1 = pars->vcpu_now;
+	/* If this is the only vcpu in the list, put it in the ret.task and break */
+	if(list_is_singular(pars->vcpu_now)==0)
+	{
+		ret.task = vcpus;
+		return ret;
+	}
+	else
+	{
+		while(!vcpu_runnable(vcpus))
+		{
+			if(pars->vcpu_now==pos1)
+				break;
+		
+			pars->vcpu_now = pars->vcpu_now->next;
+			if(pars->vcpu_now = &pars->vcpu_list)
+				pars->vcpu_now = pars->vcpu_now->next;
+			vcpus = list_entry(pars->vcpu_now, struct AAF_vcpu, vcpu_list);
+		}
+		ret.task = vcpus;
+	}
+	return ret;
+}
 /******************************************************************************************/
 /* Work is in progress, do not release #ifdefs until the functions are fully developed */
 #ifndef __AAF_SINGLE__
@@ -543,7 +754,7 @@ static void AAF_deinit( struct scheduler *ops)
         /* Scheduler Init Functions */
         .init = AAF_init,
         .deinit = AAF_deinit,
-
+	.switch_sched = AAF_switch,
         /* PCPU Functions */
 	.pick_cpu = AAF_pick_cpu,
         .alloc_pdata = AAF_alloc_pdata,
@@ -558,8 +769,8 @@ static void AAF_deinit( struct scheduler *ops)
         /* VCPU Allocation */
         .alloc_vdata = AAF_alloc_vdata,
         .free_vdata  = AAF_free_vdata,
-        .insert_vcpu = AAF_insert_vcpu,
-        .remove_vcpu = AAF_remove_vcpu,
+        .insert_vcpu = NULL, /* NULL since there is no global queue being maintained */
+        .remove_vcpu = NULL,
 
         /***************Need modification list****************/
         /*
