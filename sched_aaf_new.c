@@ -1,3 +1,4 @@
+
 /************** AAF ******************
 * Developers : Pavan Kumar Paluri & Guangli Dai
 * AAF: Algorithm that creates fixed partitions and assisgns them
@@ -237,13 +238,74 @@ struct time_slice
 	* we can as well make use of the domain_handle to retreive the partition residing in it 
 	* Provide the domain id and the function will return the concerned partition as every domain has only 1 partition */
 
-static struct AAF_partition *get_AAF_par(struct AAF_dom *dom_ptr)
+static inline struct AAF_partition *get_AAF_par(struct AAF_dom *dom_ptr)
 {
 	
 	/* Iterate through the list of domains to see if it matches dom_id */
 	
 		return dom_ptr->inter_par;
 	
+}
+
+static inline void swap(int * a, int * b)
+{
+    int temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+/*Adjust each element to a reasonable place in the maximum heap*/
+static inline void down_adjust(int *arr, int i, int n)
+{
+    int son = i*2+1, parent = i;
+    while(son<n)
+    {
+        if(son+1<n && arr[son+1] > arr[son])
+            son ++;
+        if(arr[parent] > arr[son])
+            return;
+        swap(&arr[parent], &arr[son]);
+        parent = son;
+        son = parent * 2 + 1;
+    }
+}
+
+/*Heap sort and insert elements into the corresponding pcpu */
+/* Returning sorted timeslices */
+static inline void heap_sort_insert(int* arr, int n, int pcpu, struct AAF_dom *dom_ptr)
+{
+    int counter = 0;
+    struct AAF_pcpu* apcpu = AAF_PCPU(pcpu); 
+    struct time_slice* t;
+    struct list_head *head = &apcpu->time_list, *end = (head)->prev, *temp = end;
+    /*initialize the heap*/
+    for(counter = n/2 -1; counter >= 0; counter --)
+    {
+        down_adjust(arr, counter, n);
+    }
+    for(counter = n-1; counter>0; counter--)
+    {
+        /*arr[0] is now the largest time slice, insert it from the back
+         * Utilize functions list_last_entry and list_prev_entry to accomplish the insertion.
+         * Mind that the index of the time slice needs to be mentioned in struct timeslice.
+        */
+
+        while(temp!=head && list_entry(temp, struct time_slice, time_list)->index > arr[counter])
+        {
+            temp = temp->prev;
+        }
+        /*Find the correct place to insert and then initialize the timeslice and insert it into the linked list*/
+        t = xzalloc(struct time_slice);
+        t->dom_ptr = dom_ptr;
+        INIT_LIST_HEAD(&t->time_list);
+        t->index = arr[counter];
+        list_add(&t->time_list, temp);
+        
+        swap(&arr[0], &arr[counter]);
+        down_adjust(arr, 0, counter - 1);
+
+
+    }
 }
 
 
@@ -390,8 +452,9 @@ db aaf_calc(db *factor,int k)
 	* Returns sorted list of time slices 
 **/
 
-static inline void AAF_single(struct AAF_dom *dom, const struct scheduler *ops)
+static inline void AAF_single(const struct scheduler *ops)
 {
+	struct AAF_dom *dom;
 	struct AAF_private_info *prv;
 	double maxaaf;
 	int w=1;
@@ -403,9 +466,6 @@ static inline void AAF_single(struct AAF_dom *dom, const struct scheduler *ops)
 	/* iterate through the list of domains and collect the cumulative hyperperiod of all the 
 	 * partitions residing in every domain */
 	int level=0,counter,i=0,hyperp;
-	int *distance;
-	s_time_t *t_p_counter;
-	s_time_t **t_p;
 	db p;
 	p.x=1;
 	temp.x=1;
@@ -417,19 +477,16 @@ static inline void AAF_single(struct AAF_dom *dom, const struct scheduler *ops)
 			counter++; /* Gives the final count value of num of
 							    * domains */
 			}
-	t_p_counter = (s_time_t*)malloc(counter*sizeof(s_time_t));
-	distance = (s_time_t*)malloc(counter*sizeof(s_time_t));
+	/* Memory Allocation for uni dimensional arrays using sizeof */
+	s_time_t t_p_counter[sizeof(s_time_t)*counter];
+	s_time_t distance[sizeof(s_time_t)*counter];
 	/* 1st array assignment of number of domains */
 	/* 2nd array assignment of hyperperiod */
 	hyperp = (int) prv->hp;
-	*t_p=(s_time_t **)malloc(counter*sizeof(s_time_t*));
+	/* *t_p=(s_time_t **)malloc(counter*sizeof(s_time_t*)); */
+	/*(s_time_t**) (*t_p)[sizeof(s_time_t*)*counter];  2D array mem alloc */
+	s_time_t t_p[sizeof(s_time_t)*counter][sizeof(s_time_t)*hyperp]; /* Attempt 2 */
 	
-	/* Allocating memory to the 2nd dimension of the 2d  array */
-	for(int i=0;i<(counter);i++)
-	{
-		(*t_p)[i] = (s_time_t*)malloc(hyperp*sizeof(s_time_t));
-	}		
-
 
 	while(counter>0)
 	{
@@ -462,7 +519,14 @@ static inline void AAF_single(struct AAF_dom *dom, const struct scheduler *ops)
 			    	
 			}
 		}
-	level++;
+		level++;
+	}
+	i=0;
+	list_for_each_entry(dom, &AAF_PRIV_INFO(ops)->ndom, dom_list)
+	{
+		heap_sort_insert(t_p[i],t_p_counter[i], smp_processor_id(),dom);
+		i++;
+	
 	}
 
 }
@@ -480,10 +544,20 @@ static int AAF_pick_cpu(struct scheduler *ops, struct vcpu *v)
 	cpumask_t *online;
 	int cpu_no;
 	/* Stores in cpus cpumask_t the mask of online CPUS on which the domains can run (soft affinity) */
+	
+	/*
+
 	online = cpupool_scheduler_cpumask(v->domain->cpupool);
+	
+	*/
 	/* cpumask_and(destination,src1,src2); 
 	 * Now do an intersection of available and onlie CPUs and store the result in &cpus */
+	/*
+
 	cpumask_and(&cpus,online,v->cpu_hard_affinity); 
+
+	*/
+
 	/* Now try to find if the CPU on which the current VCPU residing is available or not 
 	 * Else, proceed with finding other available PCPUs/CPUs.
 	
@@ -596,6 +670,9 @@ static void *AAF_alloc_domdata(struct scheduler *ops, struct domain *dom)
 	/* Linked List Initializations of both domains and partitions within */
 	INIT_LIST_HEAD(&doms->dom_list);
 	INIT_LIST_HEAD(&par->vcpu_list); 
+	list_add(&AAF_PRIV_INFO(ops)->ndom, &doms->dom_list);
+	AAF_single(ops);
+
 }
 
 /*************************** DOMAIN DEALLOCATION ********************
@@ -743,13 +820,13 @@ static struct task_slice AAF_schedule(const struct scheduler *ops, s_time_t now,
 }
 /******************************************************************************************/
 /* Work is in progress, do not release #ifdefs until the functions are fully developed */
-#ifndef __AAF_SINGLE__
+#ifdef __AAF_SINGLE__
 
  const struct scheduler sched_aaf =
 {
         .name = "AAF Scheduler",
          .opt_name = "aaf",
-        .sched_id = XEN_SCHEDULER_AAF, /* sched_id of AAF has to be registered later on */
+        .sched_id = XEN_SCHEDULER_CREDIT2, /* sched_id of AAF has to be registered later on */
         
         /* Scheduler Init Functions */
         .init = AAF_init,
